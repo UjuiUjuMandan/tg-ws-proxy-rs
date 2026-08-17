@@ -5,11 +5,7 @@ flags you would pass to `tg-ws-proxy`, tap **Start**, and when the `tg://proxy`
 link appears tap it (or let the app open it) to add the proxy in Telegram.
 
 The listen address should be `127.0.0.1` so Telegram on the same phone can
-connect. The default field is:
-
-```sh
---default-domains --host 127.0.0.1 --link-ip 127.0.0.1
-```
+connect.
 
 Add `--secret <32 hex chars>` if you want the link to stay the same across
 restarts. `--log-file` is ignored; logs go to the on-screen view and logcat

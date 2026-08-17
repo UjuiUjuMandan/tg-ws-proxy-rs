@@ -41,7 +41,7 @@ static STATE: Mutex<ProxyState> = Mutex::new(ProxyState {
     thread: None,
 });
 
-const NATIVE_CLASS_NAME: &str = "io/github/valnesfjord/tgwsproxy/NativeProxy";
+const NATIVE_CLASS_NAME: &str = "com/github/valnesfjord/tg_ws_proxy_rs/NativeProxy";
 
 #[unsafe(no_mangle)]
 pub extern "system" fn JNI_OnLoad(
@@ -59,7 +59,9 @@ pub extern "system" fn JNI_OnLoad(
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_valnesfjord_tgwsproxy_NativeProxy_nativeStart<'caller>(
+pub extern "system" fn Java_com_github_valnesfjord_tg_1ws_1proxy_1rs_NativeProxy_nativeStart<
+    'caller,
+>(
     mut unowned_env: EnvUnowned<'caller>,
     class: JClass<'caller>,
     args: JString<'caller>,
@@ -87,7 +89,9 @@ pub extern "system" fn Java_io_github_valnesfjord_tgwsproxy_NativeProxy_nativeSt
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_valnesfjord_tgwsproxy_NativeProxy_nativeStop<'caller>(
+pub extern "system" fn Java_com_github_valnesfjord_tg_1ws_1proxy_1rs_NativeProxy_nativeStop<
+    'caller,
+>(
     mut unowned_env: EnvUnowned<'caller>,
     class: JClass<'caller>,
 ) {
@@ -102,7 +106,9 @@ pub extern "system" fn Java_io_github_valnesfjord_tgwsproxy_NativeProxy_nativeSt
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_valnesfjord_tgwsproxy_NativeProxy_nativeIsRunning<'caller>(
+pub extern "system" fn Java_com_github_valnesfjord_tg_1ws_1proxy_1rs_NativeProxy_nativeIsRunning<
+    'caller,
+>(
     mut unowned_env: EnvUnowned<'caller>,
     class: JClass<'caller>,
 ) -> jboolean {

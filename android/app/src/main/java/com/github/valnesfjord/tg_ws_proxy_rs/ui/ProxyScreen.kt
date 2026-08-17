@@ -1,4 +1,4 @@
-package io.github.valnesfjord.tgwsproxy.ui
+package com.github.valnesfjord.tg_ws_proxy_rs.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +25,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -36,8 +40,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.github.valnesfjord.tgwsproxy.ProxyViewModel
-import io.github.valnesfjord.tgwsproxy.R
+import com.github.valnesfjord.tg_ws_proxy_rs.ProxyViewModel
+import com.github.valnesfjord.tg_ws_proxy_rs.R
 
 @Composable
 fun TgWsTheme(content: @Composable () -> Unit) {
@@ -66,7 +70,17 @@ fun ProxyScreen(viewModel: ProxyViewModel) {
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text(stringResource(R.string.app_name)) })
+            TopAppBar(
+                title = { Text(stringResource(R.string.app_name)) },
+                actions = {
+                    IconButton(onClick = viewModel::openRepo) {
+                        Icon(
+                            imageVector = ImageVector.vectorResource(R.drawable.ic_github),
+                            contentDescription = stringResource(R.string.view_on_github),
+                        )
+                    }
+                },
+            )
         },
     ) { padding ->
         Column(

@@ -1,4 +1,4 @@
-package io.github.valnesfjord.tgwsproxy
+package com.github.valnesfjord.tg_ws_proxy_rs
 
 /**
  * JNI boundary for `src/android.rs`.

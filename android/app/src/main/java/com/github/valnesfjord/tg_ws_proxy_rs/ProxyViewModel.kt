@@ -1,4 +1,4 @@
-package io.github.valnesfjord.tgwsproxy
+package com.github.valnesfjord.tg_ws_proxy_rs
 
 import android.app.Application
 import android.content.ActivityNotFoundException
@@ -75,6 +75,14 @@ class ProxyViewModel(application: Application) : AndroidViewModel(application) {
         } catch (_: ActivityNotFoundException) {
             ProxyBridge.reportMessage(getApplication<Application>().getString(R.string.telegram_missing))
         }
+    }
+
+    fun openRepo() {
+        val uri = "https://github.com/valnesfjord/tg-ws-proxy-rs".toUri()
+        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        getApplication<Application>().startActivity(intent)
     }
 
     companion object {

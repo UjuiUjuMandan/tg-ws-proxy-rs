@@ -1,4 +1,4 @@
-package io.github.valnesfjord.tgwsproxy
+package com.github.valnesfjord.tg_ws_proxy_rs
 
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow

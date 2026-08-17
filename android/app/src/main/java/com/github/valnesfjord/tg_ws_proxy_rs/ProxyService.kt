@@ -1,4 +1,4 @@
-package io.github.valnesfjord.tgwsproxy
+package com.github.valnesfjord.tg_ws_proxy_rs
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -18,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import androidx.core.content.edit
 
 class ProxyService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -84,7 +85,7 @@ class ProxyService : Service() {
     }
 
     private fun startProxy(args: String) {
-        prefs().edit().putString(PREF_ARGS, args).apply()
+        prefs().edit { putString(PREF_ARGS, args) }
         ProxyBridge.clearError()
         goForeground(getString(R.string.status_starting))
         proxyStarted = true
@@ -168,11 +169,11 @@ class ProxyService : Service() {
     private fun prefs() = getSharedPreferences(PREFS, MODE_PRIVATE)
 
     companion object {
-        const val ACTION_START = "io.github.valnesfjord.tgwsproxy.START"
-        const val ACTION_STOP = "io.github.valnesfjord.tgwsproxy.STOP"
+        const val ACTION_START = "com.github.valnesfjord.tg_ws_proxy_rs.START"
+        const val ACTION_STOP = "com.github.valnesfjord.tg_ws_proxy_rs.STOP"
         const val EXTRA_ARGS = "args"
         const val DEFAULT_ARGS =
-            "--default-domains --host 127.0.0.1 --link-ip 127.0.0.1"
+            "--default-domains --cf-balance --quiet --host 127.0.0.1 --link-ip 127.0.0.1"
         const val PREFS = "tg_ws_proxy"
         const val PREF_ARGS = "args"
 
