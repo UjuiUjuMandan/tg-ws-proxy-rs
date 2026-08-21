@@ -1,7 +1,10 @@
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use clap::Parser;
+use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
 
 use tg_ws_proxy_rs::config::Config;
 use tg_ws_proxy_rs::crypto::{ProtoTag, generate_client_handshake};
@@ -533,5 +536,146 @@ async fn inbound_faketls_rejects_a_client_hello_for_another_hostname() {
             .await
             .is_err(),
         "an SNI mismatch must not trigger an outbound connection"
+    );
+}
+
+// ─── Domain-fronting fallback (issue #81) ────────────────────────────────────
+
+const FRONTED_SNI: &str = "front.example.test";
+
+/// A fake DC that mimics SNI-based DPI. Connections presenting a real
+/// `kws*.web.telegram.org` SNI are either blackholed (the handshake stalls —
+/// a dropping DPI) or aborted right after the ClientHello (a resetting DPI);
+/// any other SNI gets a full TLS + WebSocket upgrade.
+///
+/// Both DPI flavors must reach the fronted retry: a reset is not a timeout,
+/// but it is just as much an "SNI was read and the connection died around
+/// it" signature. Certificates never match the fronted SNI, which also proves
+/// verification is skipped on the fronted path.
+async fn dpi_dc(listener: TcpListener, seen: Arc<Mutex<Vec<String>>>, abort_direct: bool) {
+    common::install_rustls_provider();
+    let cert = rcgen::generate_simple_self_signed(vec![FRONTED_SNI.to_string()]).unwrap();
+    let cert_der = rustls::pki_types::CertificateDer::from(cert.serialize_der().unwrap());
+    let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(
+        rustls::pki_types::PrivatePkcs8KeyDer::from(cert.serialize_private_key_der()),
+    );
+    let config = Arc::new(
+        rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der], key_der)
+            .unwrap(),
+    );
+
+    loop {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let seen = Arc::clone(&seen);
+        let config = Arc::clone(&config);
+        tokio::spawn(async move {
+            let peek =
+                tokio_rustls::LazyConfigAcceptor::new(rustls::server::Acceptor::default(), stream);
+            tokio::pin!(peek);
+            let Ok(start) = peek.as_mut().await else {
+                return;
+            };
+            let sni = start
+                .client_hello()
+                .server_name()
+                .unwrap_or_default()
+                .to_string();
+            seen.lock().unwrap().push(sni.clone());
+
+            if sni.contains("web.telegram.org") {
+                if abort_direct {
+                    // Dropping `start` closes the socket before any
+                    // ServerHello goes out: an abrupt reset, not a stall.
+                    return;
+                }
+                // Blackhole: hold the socket open without answering, so the
+                // client's handshake runs out its clock.
+                std::future::pending::<()>().await;
+            }
+
+            let Ok(tls) = start.into_stream(config).await else {
+                return;
+            };
+            if let Ok(ws) = tokio_tungstenite::accept_async(tls).await {
+                // Hold the upgraded connection open until the test ends.
+                let (_tx, mut rx) = ws.split();
+                let _ = tokio::time::timeout(common::TASK_TIMEOUT * 6, rx.next()).await;
+            }
+        });
+    }
+}
+
+/// Drive one client connection against a DPI-style DC and return every SNI
+/// the DC observed on the wire.
+///
+/// The DC (and the CONNECT tunnel that reaches it, since the proxy always
+/// dials `:443`) live on ephemeral ports; `dc` distinguishes tests from each
+/// other because the failure cooldowns are process-global and keyed by DC.
+async fn drive_fronting_scenario(dc: i16, abort_direct: bool) -> Vec<String> {
+    let dc_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dc_addr = dc_listener.local_addr().unwrap();
+    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    tokio::spawn(dpi_dc(dc_listener, Arc::clone(&seen), abort_direct));
+
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_addr = proxy_listener.local_addr().unwrap();
+    tokio::spawn(common::tunneling_connect_proxy(proxy_listener, dc_addr));
+
+    let dc_arg = format!("{dc}:127.0.0.1");
+    let config = proxy_config(
+        &format!("http://{proxy_addr}"),
+        &[
+            "--dc-ip",
+            &dc_arg,
+            "--fronting-domain",
+            FRONTED_SNI,
+            "--ws-connect-timeout",
+            "1",
+            "--pool-size",
+            "0",
+        ],
+    );
+
+    let secret = config.secret_bytes();
+    let (mut client, handler) = start_proxy_connection(config).await;
+    let (handshake, _, _) = generate_client_handshake(&secret, dc, ProtoTag::PaddedIntermediate);
+    client.write_all(&handshake).await.unwrap();
+    // Long enough for the direct attempt to time out (or be reset) and the
+    // fronted retry to complete its upgrade.
+    tokio::time::sleep(common::TASK_TIMEOUT).await;
+    drop(client);
+    await_proxy_handler(handler).await;
+
+    let snis = seen.lock().unwrap().clone();
+    assert!(
+        snis.iter().any(|s| s.contains("web.telegram.org")),
+        "no direct kws SNI attempt observed: {snis:?}"
+    );
+    snis
+}
+
+#[tokio::test]
+async fn fronting_retries_after_a_stalled_handshake() {
+    let snis = drive_fronting_scenario(2, false).await;
+    assert!(
+        snis.iter().any(|s| s == FRONTED_SNI),
+        "a stalled handshake must trigger a fronted retry: {snis:?}"
+    );
+}
+
+#[tokio::test]
+async fn fronting_retries_after_a_reset_handshake() {
+    // Regression test: a reset surfaces as `Failed`, not `TimedOut`, and the
+    // reactive fronting used to gate on the timeout variant alone — so on a
+    // resetting DPI the proxy re-sent the real kws SNI on every connection
+    // and never fronted at all.
+    let snis = drive_fronting_scenario(4, true).await;
+    assert!(
+        snis.iter().any(|s| s == FRONTED_SNI),
+        "a reset handshake must trigger a fronted retry: {snis:?}"
     );
 }

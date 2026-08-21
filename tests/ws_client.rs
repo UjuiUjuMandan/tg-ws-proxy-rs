@@ -97,7 +97,7 @@ async fn ws_client_connects_through_outbound_proxy() {
     .await;
 
     match result {
-        WsConnectResult::Failed(reason) => {
+        WsConnectResult::ConnectFailed(reason) => {
             assert!(reason.contains("HTTP proxy"));
             assert!(reason.contains("407"));
         }

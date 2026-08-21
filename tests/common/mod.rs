@@ -160,13 +160,46 @@ pub async fn tunneling_http_proxy(target: SocketAddr) -> (SocketAddr, JoinHandle
             async {
                 let _ = tokio::io::copy(&mut ro, &mut wi).await;
                 let _ = wi.shutdown().await;
-            }
+            },
         );
 
         request
     });
 
     (proxy_addr, proxy_task)
+}
+
+/// Same as [`tunneling_http_proxy`], but serves *every* `CONNECT` for as long
+/// as the listener is alive — for tests whose connection chain needs more
+/// than one outbound attempt (e.g. a direct try followed by a fronted retry).
+///
+/// The requested target is ignored: the proxy always dials `target`, which
+/// lets a fake endpoint live on an ephemeral port while the code under test
+/// dials the fixed `:443` it believes in.
+pub async fn tunneling_connect_proxy(listener: TcpListener, target: SocketAddr) {
+    loop {
+        let Ok((mut inbound, _)) = listener.accept().await else {
+            return;
+        };
+        tokio::spawn(async move {
+            read_http_connect_request(&mut inbound).await;
+            inbound.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.unwrap();
+
+            let outbound = TcpStream::connect(target).await.unwrap();
+            let (mut ri, mut wi) = inbound.split();
+            let (mut ro, mut wo) = tokio::io::split(outbound);
+            let _ = tokio::join!(
+                async {
+                    let _ = tokio::io::copy(&mut ri, &mut wo).await;
+                    let _ = wo.shutdown().await;
+                },
+                async {
+                    let _ = tokio::io::copy(&mut ro, &mut wi).await;
+                    let _ = wi.shutdown().await;
+                },
+            );
+        });
+    }
 }
 
 /// A server that accepts one connection and reads a 64-byte MTProto

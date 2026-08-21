@@ -92,6 +92,10 @@ pub enum WsConnectResult {
     Redirect(u16),
     /// Any other non-101 status code or transport error.
     Failed(String),
+    /// The TCP connect itself failed without running out the clock (refused,
+    /// DNS, proxy rejection): nothing established to talk TLS over, so this
+    /// is not an SNI-blocking signature and must not trigger fronting.
+    ConnectFailed(String),
     /// The TCP connect ran out the clock: nothing at `ip:443` answered.
     ///
     /// Distinct from [`Self::TimedOut`] because the two call for opposite
@@ -116,9 +120,9 @@ pub struct WsAttempt {
     /// Every hostname answered with a redirect — Telegram has taken the
     /// WebSocket path away for this DC rather than the network blocking it.
     pub all_redirects: bool,
-    /// A TLS/upgrade handshake stalled: the address answers, the handshake
-    /// does not finish.  The SNI-blocking signature that domain fronting is
-    /// for.
+    /// A TLS/upgrade handshake failed after the TCP connection was
+    /// established — stalled (timeout) or died outright (reset), both of
+    /// which are SNI-blocking signatures that domain fronting is for.
     pub upgrade_timed_out: bool,
     /// A TCP connect stalled: nothing at the address answered at all.
     pub connect_timed_out: bool,
@@ -208,7 +212,7 @@ async fn connect_ws_with_path(
     let tcp = match outbound.connect(ip, 443, timeout).await {
         Ok(s) => s,
         Err(e) if e.timed_out => return WsConnectResult::ConnectTimedOut(e.reason),
-        Err(e) => return WsConnectResult::Failed(e.reason),
+        Err(e) => return WsConnectResult::ConnectFailed(e.reason),
     };
 
     // Disable Nagle algorithm for lower latency.
@@ -413,12 +417,21 @@ pub async fn connect_ws_for_dc_with_outbound(
                 warn!("WS DC{}{} failed on {}: {}", dc, media, domain, reason);
 
                 all_redirects = false; // a real failure, not just a redirect
+                // The TCP connection was established and the handshake then
+                // died without an HTTP answer (e.g. a reset right after the
+                // ClientHello) — as much an SNI-blocking signature as a stall.
+                any_upgrade_timed_out = true;
             }
             WsConnectResult::TimedOut => {
                 warn!("WS DC{}{} timed out on {}", dc, media, domain);
 
                 all_redirects = false;
                 any_upgrade_timed_out = true;
+            }
+            WsConnectResult::ConnectFailed(reason) => {
+                warn!("WS DC{}{} failed on {}: {}", dc, media, domain, reason);
+
+                all_redirects = false;
             }
             WsConnectResult::ConnectTimedOut(reason) => {
                 warn!("WS DC{}{} failed on {}: {}", dc, media, domain, reason);
@@ -628,7 +641,7 @@ pub async fn connect_cf_ws_for_dc_with_outbound(
                     dc, media, code, domain
                 );
             }
-            WsConnectResult::Failed(reason) => {
+            WsConnectResult::Failed(reason) | WsConnectResult::ConnectFailed(reason) => {
                 // A `kws{N}-1` record that is simply absent from the user's CF
                 // zone is expected, not a failure: retry the base record next
                 // without a warning and without counting it against
@@ -738,7 +751,7 @@ pub async fn connect_cf_worker_ws_for_dc_with_outbound(
             );
             None
         }
-        WsConnectResult::Failed(reason) => {
+        WsConnectResult::Failed(reason) | WsConnectResult::ConnectFailed(reason) => {
             warn!(
                 "CF Worker DC{}{} failed on {}: {}",
                 dc, media, worker_domain, reason

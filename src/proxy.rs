@@ -1095,15 +1095,16 @@ impl Route<'_> {
         None
     }
 
-    /// Retry a stalled WebSocket *handshake* once with a fronted SNI.
+    /// Retry a failed WebSocket *handshake* once with a fronted SNI.
     ///
-    /// Gated on the TLS/upgrade timeout specifically: that is the address
-    /// answering and then the handshake going nowhere, which is what SNI-based
-    /// DPI looks like and what fronting works around.  A TCP connect that never
-    /// completed is a different problem — nothing is listening as far as this
-    /// host can tell, and a different SNI on a connection that cannot be opened
-    /// changes nothing.  Also skipped while a previous fronting attempt is in
-    /// its own fail-cooldown (see `Config::fronting_fail_cooldown`).
+    /// Gated on the TLS/upgrade failing after the TCP connection was
+    /// established — stalled (timeout) or killed outright (reset), both of
+    /// which are what SNI-based DPI looks like and what fronting works
+    /// around.  A TCP connect that never completed is a different problem —
+    /// nothing is listening as far as this host can tell, and a different SNI
+    /// on a connection that cannot be opened changes nothing.  Also skipped
+    /// while a previous fronting attempt is in its own fail-cooldown (see
+    /// `Config::fronting_fail_cooldown`).
     async fn reactive_fronting(
         &self,
         target_ip: &str,
@@ -1115,7 +1116,7 @@ impl Route<'_> {
         let domain = self.runtime.fronting_domain()?;
 
         info!(
-            "[{}] DC{}{} WS timed out → trying fronting (SNI {})",
+            "[{}] DC{}{} WS handshake failed after connect → trying fronting (SNI {})",
             self.label, self.dc, self.media, domain
         );
 
