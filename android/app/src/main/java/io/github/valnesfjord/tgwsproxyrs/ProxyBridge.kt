@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * Process-wide state the service and the UI both read.
  *
  * Native callbacks land here so a configuration change cannot drop the
- * listener that `src/android.rs` calls by class name.
+ * listener that `crates/android-jni/src/android.rs` calls by class name.
  */
 object ProxyBridge {
     private val tgLinkRegex = Regex("""tg://proxy\?[^\s]+""")
