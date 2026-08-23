@@ -19,6 +19,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import androidx.core.content.edit
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class ProxyService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -77,9 +79,7 @@ class ProxyService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
-        if (NativeProxy.nativeIsRunning()) {
-            NativeProxy.nativeStop()
-        }
+        stopNative()
         ProxyBridge.setRunning(false)
         super.onDestroy()
     }
@@ -127,7 +127,7 @@ class ProxyService : Service() {
 
     private fun stopProxy() {
         proxyStarted = false
-        NativeProxy.nativeStop()
+        stopNative()
         ProxyBridge.setRunning(false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -179,6 +179,25 @@ class ProxyService : Service() {
 
         private const val CHANNEL_ID = "proxy"
         private const val NOTIFICATION_ID = 1
+
+        /**
+         * Runs the native shutdown off the main thread.  It has to outlive the
+         * service: [onDestroy] cancels [scope] before it stops the proxy, so a
+         * coroutine launched there would never run.  A single thread also keeps
+         * a Stop button press and the [stopSelf] that follows it from entering
+         * the JNI shim at the same time.
+         */
+        private val stopExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "proxy-stop").apply { isDaemon = true }
+        }
+
+        private fun stopNative() {
+            stopExecutor.execute {
+                if (NativeProxy.nativeIsRunning()) {
+                    NativeProxy.nativeStop()
+                }
+            }
+        }
 
         fun start(context: Context, args: String) {
             val intent = Intent(context, ProxyService::class.java)
