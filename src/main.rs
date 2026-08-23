@@ -34,7 +34,13 @@ async fn main() {
             eprintln!("invalid outbound proxy config: {e}");
             std::process::exit(2);
         }
-        Err(e) => panic!("{e}"),
+        // Bind and InvalidListenAddress are ordinary user mistakes -- "port
+        // already in use" must not reach the user as a panic with a
+        // RUST_BACKTRACE suggestion attached.
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
     }
 }
 
