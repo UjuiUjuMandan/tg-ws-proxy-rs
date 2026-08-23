@@ -7,6 +7,7 @@
 
 use std::io::{self, Write};
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use jni::objects::{Global, JClass, JObject, JString, JValue, JValueOwned};
 use jni::signature::MethodSignature;
@@ -34,11 +35,18 @@ static VOID_SIG: MethodSignature = jni_sig!(() -> void);
 struct ProxyState {
     shutdown: Option<watch::Sender<bool>>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// Set by [`stop_proxy`], cleared when the worker is reaped.  The two
+    /// readers need different answers while the runtime winds down: Kotlin
+    /// must see `nativeIsRunning() == false` the moment Stop is pressed, or
+    /// `ACTION_START` would repaint "Running" over a proxy with no listener,
+    /// while [`start_proxy`] must keep refusing until the old runtime is gone.
+    stopping: bool,
 }
 
 static STATE: Mutex<ProxyState> = Mutex::new(ProxyState {
     shutdown: None,
     thread: None,
+    stopping: false,
 });
 
 const NATIVE_CLASS_NAME: &str = "io/github/valnesfjord/tgwsproxyrs/NativeProxy";
@@ -113,7 +121,7 @@ pub extern "system" fn Java_io_github_valnesfjord_tgwsproxyrs_NativeProxy_native
             cache_native_class(env, &class);
             Ok(match STATE.lock() {
                 Ok(state) => {
-                    if state.thread.as_ref().is_some_and(|t| !t.is_finished()) {
+                    if !state.stopping && state.thread.as_ref().is_some_and(|t| !t.is_finished()) {
                         JNI_TRUE
                     } else {
                         JNI_FALSE
@@ -177,8 +185,23 @@ fn start_proxy(args: &str) -> Result<(), String> {
     let mut state = STATE
         .lock()
         .map_err(|_| "proxy state lock poisoned".to_string())?;
-    if state.thread.as_ref().is_some_and(|t| !t.is_finished()) {
-        return Err("proxy is already running".into());
+    // Reap a worker that has already exited — a `--check` run, a startup
+    // failure, or a Stop whose runtime has finished winding down — so the guard
+    // below only ever sees a thread that is still doing something.
+    if state.thread.as_ref().is_some_and(|t| t.is_finished()) {
+        state.thread = None;
+        state.stopping = false;
+    }
+    if state.thread.is_some() {
+        // Refusing is the only thing that keeps exactly one worker alive at a
+        // time, which is what makes `emit_listening`/`emit_stopped`/`emit_error`
+        // unambiguous about which run they describe.  The wind-down window is
+        // normally sub-millisecond, so this reads as "retry", not as a dead end.
+        return Err(if state.stopping {
+            "proxy is still stopping, try again in a moment".into()
+        } else {
+            "proxy is already running".into()
+        });
     }
 
     let config = Config::try_from_cli_line(args)?;
@@ -224,11 +247,19 @@ fn start_proxy(args: &str) -> Result<(), String> {
                 Ok(()) => emit_stopped(),
                 Err(e) => emit_error(&format!("proxy failed: {e}")),
             }
+
+            // Report first, wind down second: the listener was dropped when
+            // `block_on` returned, so the port is already free and the app can
+            // be told at once.  What is left is the runtime's own teardown,
+            // which a plain `drop(rt)` would let block indefinitely on an
+            // outstanding blocking task (a stuck `getaddrinfo`); this bounds it.
+            rt.shutdown_timeout(Duration::from_secs(2));
         })
         .map_err(|e| format!("failed to spawn proxy thread: {e}"))?;
 
     state.shutdown = Some(shutdown_tx);
     state.thread = Some(thread);
+    state.stopping = false;
     Ok(())
 }
 
@@ -240,11 +271,13 @@ fn stop_proxy() {
     if let Some(tx) = state.shutdown.take() {
         let _ = tx.send(true);
     }
-    let thread = state.thread.take();
-    drop(state);
-    if let Some(thread) = thread {
-        let _ = thread.join();
-    }
+    // Deliberately no `join()`: this runs on the Android main thread, and the
+    // worker's tail is a bounded runtime shutdown that may still be waiting on
+    // a blocking task the OS has stalled (`getaddrinfo`) — an ANR is a much
+    // worse outcome than a proxy that takes a moment to finish winding down.
+    // The join handle stays in `STATE` so `start_proxy` can still tell "winding
+    // down" from "idle".
+    state.stopping = true;
 }
 
 fn install_logging(config: &Config) {
