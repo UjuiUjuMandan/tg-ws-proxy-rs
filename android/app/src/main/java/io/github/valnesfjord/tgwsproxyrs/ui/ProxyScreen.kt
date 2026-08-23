@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -33,7 +33,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -57,13 +59,20 @@ fun TgWsTheme(content: @Composable () -> Unit) {
 fun ProxyScreen(viewModel: ProxyViewModel) {
     val args by viewModel.args.collectAsStateWithLifecycle()
     val running by viewModel.running.collectAsStateWithLifecycle()
-    val logs by viewModel.logs.collectAsStateWithLifecycle()
     val tgLink by viewModel.tgLink.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val logs = viewModel.logs
     val listState = rememberLazyListState()
+    val following by remember {
+        // Reflects the last layout pass, i.e. where the viewport was *before*
+        // the line that triggers the effect below arrived — which is exactly
+        // the question being asked: was the user reading the tail, or had they
+        // scrolled back into the history that autoscrolling would yank away?
+        derivedStateOf { !listState.canScrollForward }
+    }
 
     LaunchedEffect(logs.size) {
-        if (logs.isNotEmpty()) {
+        if (following && logs.isNotEmpty()) {
             listState.scrollToItem(logs.lastIndex)
         }
     }
@@ -149,9 +158,9 @@ fun ProxyScreen(viewModel: ProxyViewModel) {
 
             SelectionContainer(modifier = Modifier.fillMaxSize()) {
                 LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                    itemsIndexed(logs, key = { index, line -> "$index:$line" }) { _, line ->
+                    items(logs, key = { it.id }) { line ->
                         Text(
-                            line,
+                            line.text,
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = FontFamily.Monospace,
                             modifier = Modifier

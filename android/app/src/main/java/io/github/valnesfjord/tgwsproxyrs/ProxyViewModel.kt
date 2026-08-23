@@ -3,6 +3,7 @@ package io.github.valnesfjord.tgwsproxyrs
 import android.app.Application
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import androidx.compose.runtime.mutableStateListOf
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import androidx.lifecycle.AndroidViewModel
@@ -10,7 +11,6 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class ProxyViewModel(application: Application) : AndroidViewModel(application) {
@@ -25,8 +25,18 @@ class ProxyViewModel(application: Application) : AndroidViewModel(application) {
     val tgLink = ProxyBridge.tgLink
     val error = ProxyBridge.error
 
-    private val _logs = MutableStateFlow<List<String>>(emptyList())
-    val logs: StateFlow<List<String>> = _logs.asStateFlow()
+    /**
+     * Bounded log buffer the UI observes directly.  A `StateFlow<List<String>>`
+     * copied the whole list to append and copied it again to trim, i.e. up to
+     * a thousand element copies per line on a chatty proxy; a snapshot list
+     * shares its backing structure between versions and lets Compose observe
+     * the single append, so only the rows on screen recompose.
+     */
+    private val _logs = mutableStateListOf<LogLine>()
+    val logs: List<LogLine> = _logs
+
+    /** Never reused, never reordered — see [LogLine]. */
+    private var nextLogId = 0L
 
     private var autoOpenPending = false
 
@@ -34,9 +44,9 @@ class ProxyViewModel(application: Application) : AndroidViewModel(application) {
         ProxyBridge.syncFromNative()
         viewModelScope.launch {
             ProxyBridge.logs.collect { line ->
-                _logs.update { current ->
-                    val next = current + line
-                    if (next.size > MAX_LOG_LINES) next.takeLast(MAX_LOG_LINES) else next
+                _logs.add(LogLine(nextLogId++, line))
+                if (_logs.size > MAX_LOG_LINES) {
+                    _logs.removeAt(0)
                 }
             }
         }
