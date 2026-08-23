@@ -155,12 +155,6 @@ static IP_FAIL: CooldownMap<String> = CooldownMap::new();
 static UPSTREAM_FAIL: CooldownMap<String> = CooldownMap::new();
 /// Per-Worker cooldown for the Cloudflare Worker path.
 static CF_WORKER_FAIL: CooldownMap<String> = CooldownMap::new();
-/// Per-DC cooldown for a *failed* domain-fronting attempt — distinct from
-/// `Runtime`'s sticky "fronting is currently working" state.  Without this, a
-/// network that blocks Telegram's DC IPs outright (not just by SNI) would
-/// retry a doomed fronting attempt on every single connection; see
-/// `Config::fronting_fail_cooldown`.
-static FRONTING_FAIL: CooldownMap<(u32, bool)> = CooldownMap::new();
 
 fn upstream_key(host: &str, port: u16) -> String {
     format!("{}:{}", host, port)
@@ -339,7 +333,6 @@ struct Timeouts {
     upstream_fail_cooldown: Duration,
     cf_connect: Duration,
     cf_fail_cooldown: Duration,
-    fronting_fail_cooldown: Duration,
 }
 
 impl Timeouts {
@@ -356,7 +349,6 @@ impl Timeouts {
             upstream_fail_cooldown: Duration::from_secs(config.upstream_fail_cooldown),
             cf_connect: Duration::from_secs(config.cf_connect_timeout),
             cf_fail_cooldown: Duration::from_secs(config.cf_fail_cooldown),
-            fronting_fail_cooldown: Duration::from_secs(config.fronting_fail_cooldown),
         }
     }
 }
@@ -1028,45 +1020,41 @@ impl Route<'_> {
         None
     }
 
-    /// Open a fresh direct WebSocket to `target_ip`, applying the
-    /// domain-fronting fallback and the per-DC cooldown on failure.
+    /// Open a fresh direct WebSocket to `target_ip`, applying domain fronting
+    /// and the per-DC cooldown on failure.
+    ///
+    /// With `--fronting-domain` configured, the fronted SNI is presented on
+    /// every attempt unconditionally — fronting is how this network reaches
+    /// Telegram at all, so re-probing the plain path first only donates a
+    /// connect timeout (or a reset) to the DPI on every connection.  A fronted
+    /// failure falls back to one plain attempt before the usual cooldowns and
+    /// the rest of the ladder, so a network where fronting stops working still
+    /// self-heals.
     async fn direct_ws(&self, target_ip: &str) -> Option<TgWsStream> {
-        // While the domain-fronting fallback is in its sticky window, skip
-        // straight to a fronted attempt instead of the normal per-domain
-        // loop — matching upstream's "stay fronted while it keeps working"
-        // behavior instead of re-probing the (likely still-blocked) direct
-        // path on every connection.
-        let sticky_fronting = self
-            .runtime
-            .fronting_active()
-            .then(|| self.runtime.fronting_domain())
-            .flatten();
+        if let Some(domain) = self.runtime.fronting_domain() {
+            let attempt = self.connect_ws(target_ip, Some(domain)).await;
+
+            if let Some(ws) = attempt.ws {
+                info!(
+                    "[{}] DC{}{} → fronting connected (SNI {})",
+                    self.label, self.dc, self.media, domain
+                );
+                return Some(ws);
+            }
+
+            warn!(
+                "[{}] DC{}{} fronting (SNI {}) failed → trying plain WS",
+                self.label, self.dc, self.media, domain
+            );
+        }
 
         // A DC inside its own cooldown is probed on a much shorter clock, so
         // a timeout there says far less about the address than a full-budget
         // one does — see `cool_down_ip`.
         let probing = WS_FAIL.active(&(self.dc, self.is_media));
-        let attempt = self.connect_ws(target_ip, sticky_fronting).await;
+        let attempt = self.connect_ws(target_ip, None).await;
 
-        if let Some(domain) = sticky_fronting {
-            if attempt.ws.is_some() {
-                self.on_fronting_success(domain);
-                return attempt.ws;
-            }
-
-            self.runtime.deactivate_fronting();
-            FRONTING_FAIL.set(
-                (self.dc, self.is_media),
-                self.timeouts.fronting_fail_cooldown,
-            );
-            warn!(
-                "[{}] DC{}{} fronting (sticky) failed, falling back, cooldown {}s",
-                self.label,
-                self.dc,
-                self.media,
-                self.timeouts.fronting_fail_cooldown.as_secs()
-            );
-        } else if attempt.ws.is_some() {
+        if attempt.ws.is_some() {
             WS_FAIL.clear(&(self.dc, self.is_media));
             IP_FAIL.clear(target_ip);
             info!(
@@ -1075,11 +1063,6 @@ impl Route<'_> {
             );
 
             return attempt.ws;
-        } else if let Some(ws) = self
-            .reactive_fronting(target_ip, attempt.upgrade_timed_out)
-            .await
-        {
-            return Some(ws);
         }
 
         self.cool_down_ws(attempt.all_redirects);
@@ -1093,53 +1076,6 @@ impl Route<'_> {
         }
 
         None
-    }
-
-    /// Retry a failed WebSocket *handshake* once with a fronted SNI.
-    ///
-    /// Gated on the TLS/upgrade failing after the TCP connection was
-    /// established — stalled (timeout) or killed outright (reset), both of
-    /// which are what SNI-based DPI looks like and what fronting works
-    /// around.  A TCP connect that never completed is a different problem —
-    /// nothing is listening as far as this host can tell, and a different SNI
-    /// on a connection that cannot be opened changes nothing.  Also skipped
-    /// while a previous fronting attempt is in its own fail-cooldown (see
-    /// `Config::fronting_fail_cooldown`).
-    async fn reactive_fronting(
-        &self,
-        target_ip: &str,
-        upgrade_timed_out: bool,
-    ) -> Option<TgWsStream> {
-        if !upgrade_timed_out || FRONTING_FAIL.active(&(self.dc, self.is_media)) {
-            return None;
-        }
-        let domain = self.runtime.fronting_domain()?;
-
-        info!(
-            "[{}] DC{}{} WS handshake failed after connect → trying fronting (SNI {})",
-            self.label, self.dc, self.media, domain
-        );
-
-        match self.connect_ws(target_ip, Some(domain)).await.ws {
-            Some(ws) => {
-                self.on_fronting_success(domain);
-                Some(ws)
-            }
-            None => {
-                FRONTING_FAIL.set(
-                    (self.dc, self.is_media),
-                    self.timeouts.fronting_fail_cooldown,
-                );
-                warn!(
-                    "[{}] DC{}{} fronting fallback failed, cooldown {}s",
-                    self.label,
-                    self.dc,
-                    self.media,
-                    self.timeouts.fronting_fail_cooldown.as_secs()
-                );
-                None
-            }
-        }
     }
 
     async fn connect_ws(&self, target_ip: &str, sni_override: Option<&str>) -> WsAttempt {
@@ -1161,15 +1097,6 @@ impl Route<'_> {
             sni_override,
         )
         .await
-    }
-
-    fn on_fronting_success(&self, domain: &str) {
-        FRONTING_FAIL.clear(&(self.dc, self.is_media));
-        self.runtime.activate_fronting();
-        info!(
-            "[{}] DC{}{} → fronting connected (SNI {})",
-            self.label, self.dc, self.media, domain
-        );
     }
 
     /// Back off from this DC's WebSocket path after a failed attempt.

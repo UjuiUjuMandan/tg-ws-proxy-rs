@@ -41,10 +41,7 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    let runtime = Arc::new(Runtime::new(outbound).with_fronting(
-        config.fronting_domain.clone(),
-        Duration::from_secs(config.fronting_cooldown),
-    ));
+    let runtime = Arc::new(Runtime::new(outbound).with_fronting(config.fronting_domain.clone()));
 
     // ── Logging ──────────────────────────────────────────────────────────
     let log_level = if config.quiet {
@@ -216,8 +213,8 @@ async fn main() {
             );
         } else {
             info!(
-                "  Domain fronting: enabled (SNI {}, sticky for {}s after success)",
-                domain, config.fronting_cooldown
+                "  Domain fronting: enabled (SNI {} on every direct WS)",
+                domain
             );
         }
     }

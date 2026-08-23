@@ -203,14 +203,12 @@ for a network that blocks Telegram's IPs outright (where fronting can't help
 either, since it still needs a real TCP connection to that IP) is to leave
 `--dc-ip` unset entirely.
 
-Disabled unless `--fronting-domain` is set. Once a fronted connection succeeds,
-the fallback stays active (including for background connection-pool refills)
-for `--fronting-cooldown` seconds (default 1800 = 30 min), so the proxy doesn't
-keep re-probing the likely-still-blocked direct path on every new connection. If
-a fronting attempt fails, `--fronting-fail-cooldown` seconds (default 60) pass
-before it's retried for that DC — otherwise a network where fronting can never
-succeed (e.g. the DC IP itself is blocked) would pay for a doomed attempt on
-every single connection.
+Disabled unless `--fronting-domain` is set. When set, fronting applies
+**unconditionally**: every direct WebSocket attempt — including background
+connection-pool refills — presents the fronted SNI first, with no plain-SNI
+probe, no sticky window and no failure cooldown. A fronted failure falls back
+to one plain attempt before the rest of the fallback ladder, so a network
+where fronting stops working still self-heals.
 
 > **Note:** TLS certificate verification is unconditionally skipped on
 > connections using this fallback, regardless of

@@ -124,22 +124,14 @@ fn fronting_domain_is_disabled_by_default() {
     let cfg = Config::try_parse_from(["tg-ws-proxy"]).unwrap();
 
     assert_eq!(cfg.fronting_domain, None);
-    assert_eq!(cfg.fronting_cooldown, 1800);
 }
 
 #[test]
 fn fronting_flags_parse() {
-    let cfg = Config::try_parse_from([
-        "tg-ws-proxy",
-        "--fronting-domain",
-        "sprinthost.ru",
-        "--fronting-cooldown",
-        "60",
-    ])
-    .unwrap();
+    let cfg =
+        Config::try_parse_from(["tg-ws-proxy", "--fronting-domain", "sprinthost.ru"]).unwrap();
 
     assert_eq!(cfg.fronting_domain.as_deref(), Some("sprinthost.ru"));
-    assert_eq!(cfg.fronting_cooldown, 60);
 }
 
 #[test]
@@ -357,7 +349,6 @@ fn timeout_and_cooldown_defaults_match_the_documented_values() {
     assert_eq!(cfg.upstream_fail_cooldown, 60);
     assert_eq!(cfg.cf_connect_timeout, 10);
     assert_eq!(cfg.cf_fail_cooldown, 60);
-    assert_eq!(cfg.fronting_fail_cooldown, 60);
     assert_eq!(cfg.pool_size, 4);
     assert_eq!(cfg.pool_max_age, 55);
     assert_eq!(cfg.port, 1443);

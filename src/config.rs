@@ -385,56 +385,31 @@ pub struct Config {
     )]
     pub cf_fail_cooldown: u64,
 
-    /// Domain to present as the TLS SNI for the domain-fronting fallback,
-    /// used when direct WebSocket connects to a DC keep timing out (a sign
-    /// of SNI-based DPI blocking). The real DC IP and `Host` are still used —
-    /// only the SNI is swapped for this unrelated, presumably-unblocked
-    /// domain, e.g. `sprinthost.ru` (the value upstream tg-ws-proxy uses).
+    /// Domain to present as the TLS SNI for direct WebSocket connections,
+    /// instead of the real `kws{N}.web.telegram.org` — domain fronting. The
+    /// real DC IP and `Host` are still used; only the SNI is swapped for this
+    /// unrelated, presumably-unblocked domain, e.g. `sprinthost.ru` (the value
+    /// upstream tg-ws-proxy uses).
+    ///
+    /// When set, fronting applies **unconditionally** to every direct
+    /// WebSocket attempt (including pool pre-connects): no plain-SNI probe
+    /// first, no sticky window, no failure cooldown. A fronted failure still
+    /// falls back to one plain attempt before the rest of the fallback
+    /// ladder, so a network where fronting stops working self-heals.
     ///
     /// **Only takes effect when `--dc-ip` is configured for that DC** — by
     /// design, matching upstream tg-ws-proxy exactly: fronting only ever
     /// applies to a direct connection to Telegram's real DC IP, never to the
     /// CF proxy/Worker/upstream-proxy paths. If you rely solely on
     /// `--cf-domain`/`--default-domains` (no `--dc-ip`), this flag has no
-    /// effect — upstream's own troubleshooting guidance for a network where
-    /// Telegram's IPs are blocked outright (where fronting can't help, since
-    /// it still needs a real TCP connection to that IP) is to leave
-    /// `--dc-ip` unset entirely so this path is never attempted.
+    /// effect.
     ///
     /// Disabled unless set. TLS certificate verification is unconditionally
-    /// skipped on connections using this fallback: the real Telegram
-    /// certificate can never match a fronted SNI, so hostname verification
-    /// would always fail — this is inherent to the technique, not a bug.
-    ///
-    /// Once a fronted connection succeeds, the fallback stays active for
-    /// `--fronting-cooldown` seconds so new connections (including
-    /// background pool refills) keep using it.
+    /// skipped on fronted connections: the real Telegram certificate can
+    /// never match a fronted SNI, so hostname verification would always fail
+    /// — this is inherent to the technique, not a bug.
     #[arg(long = "fronting-domain", env = "TG_FRONTING_DOMAIN")]
     pub fronting_domain: Option<String>,
-
-    /// Seconds to keep the domain-fronting fallback active after it last
-    /// succeeded, before returning to normal direct WebSocket attempts.
-    #[arg(
-        long = "fronting-cooldown",
-        default_value = "1800",
-        env = "TG_FRONTING_COOLDOWN"
-    )]
-    pub fronting_cooldown: u64,
-
-    /// Seconds to stop retrying the domain-fronting fallback after it fails.
-    ///
-    /// Fronting only helps against SNI-based DPI blocking — it does nothing
-    /// for a network that blocks Telegram's DC IPs outright (the fronted
-    /// attempt still has to open a real TCP connection to that IP). Without
-    /// this cooldown, every connection to that DC would retry fronting from
-    /// scratch and pay a full `--ws-connect-timeout` for a doomed attempt on
-    /// top of the already doomed direct/CF/upstream/TCP attempts.
-    #[arg(
-        long = "fronting-fail-cooldown",
-        default_value = "60",
-        env = "TG_FRONTING_FAIL_COOLDOWN"
-    )]
-    pub fronting_fail_cooldown: u64,
 
     /// Maximum age of a pooled WebSocket connection in seconds.
     /// Connections older than this are discarded and re-established.
