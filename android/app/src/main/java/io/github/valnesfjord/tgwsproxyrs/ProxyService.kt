@@ -17,7 +17,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.core.content.edit
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -80,7 +83,6 @@ class ProxyService : Service() {
     override fun onDestroy() {
         scope.cancel()
         stopNative()
-        ProxyBridge.setRunning(false)
         super.onDestroy()
     }
 
@@ -127,8 +129,15 @@ class ProxyService : Service() {
 
     private fun stopProxy() {
         proxyStarted = false
+        // Deliberately no `ProxyBridge.setRunning(false)` here.  The shim
+        // refuses to start while the previous run is winding down, and the
+        // worker only reports the stop once it is startable again, so
+        // answering for it would put a Start button in front of the user
+        // before a start could be accepted: tap Stop, tap Start, and the
+        // shim's internal "proxy is still stopping" lands in the error line.
+        // [stopNative] leaves the running state only when it knows no report
+        // is coming.
         stopNative()
-        ProxyBridge.setRunning(false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -185,17 +194,58 @@ class ProxyService : Service() {
          * service: [onDestroy] cancels [scope] before it stops the proxy, so a
          * coroutine launched there would never run.  A single thread also keeps
          * a Stop button press and the [stopSelf] that follows it from entering
-         * the JNI shim at the same time.
+         * the JNI shim at the same time — and, now that the first of those two
+         * waits for the worker's report, keeps the second from concluding
+         * "nothing is running" about a worker the first is still winding down.
          */
         private val stopExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "proxy-stop").apply { isDaemon = true }
         }
 
+        /**
+         * How long the worker is given to report its stop.
+         *
+         * Its tail is a bounded `rt.shutdown_timeout(2s)` followed by the
+         * callback, so this is that bound plus room for a loaded emulator, not
+         * a guess at how long a shutdown takes.
+         */
+        private const val STOP_REPORT_TIMEOUT_MS = 3_000L
+
         private fun stopNative() {
             stopExecutor.execute {
                 if (NativeProxy.nativeIsRunning()) {
                     NativeProxy.nativeStop()
+                    awaitStopReport()
+                } else {
+                    // Either nothing ever ran or a stop is already in flight on
+                    // an earlier task — and that task does not return until the
+                    // report has landed, so reaching this branch means no
+                    // report is coming and this is the only chance to leave the
+                    // running state.
+                    ProxyBridge.setRunning(false)
                 }
+            }
+        }
+
+        /**
+         * Block until `onNativeStopped` (or `onNativeError`) has flipped
+         * [ProxyBridge.running] false.
+         *
+         * On [stopExecutor], never on the main thread — that is the whole point
+         * of the executor, and the report comes from a native worker thread, so
+         * nothing here waits on the main looper.
+         */
+        private fun awaitStopReport() {
+            val timedOut = runBlocking {
+                withTimeoutOrNull(STOP_REPORT_TIMEOUT_MS) {
+                    ProxyBridge.running.first { !it }
+                } == null
+            }
+            if (timedOut) {
+                // Should be unreachable given the shim's bounded tail.  If a
+                // report really is lost, a UI stuck on "Running" with no way
+                // back is worse than a Start the shim might still refuse.
+                ProxyBridge.setRunning(false)
             }
         }
 
