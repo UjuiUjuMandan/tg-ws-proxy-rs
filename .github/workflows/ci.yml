@@ -129,6 +129,51 @@ jobs:
         working-directory: android
         run: ./gradlew :app:assembleDebug :app:assembleRelease
 
+      # Both ways the ABI splits can misfire are silent: a splits block that
+      # stopped applying still yields one perfectly valid fat APK, and a split
+      # for an ABI that was never cross-compiled still yields a perfectly valid
+      # APK whose lib/ is empty. Neither fails the build, both fail on a user's
+      # device, so assert the shape here. Keep the ABI list in sync with
+      # AndroidAbi.defaultAbis in android/build-logic.
+      - name: Check the split APK set
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          abis=(arm64-v8a armeabi-v7a x86_64)
+          want_universal="$(printf '%s\n' "${abis[@]}" | sort)"
+          for build_type in debug release; do
+            out="app/build/outputs/apk/$build_type"
+            # AGP appends -unsigned when no keystore is configured, so read the
+            # names AGP actually wrote rather than guessing at the suffix.
+            mapfile -t apks < <(jq -r '.elements[].outputFile' "$out/output-metadata.json")
+            if [[ "${#apks[@]}" -ne $(( ${#abis[@]} + 1 )) ]]; then
+              echo "::error::$build_type: expected $(( ${#abis[@]} + 1 )) APKs, got ${#apks[@]}: ${apks[*]}"
+              exit 1
+            fi
+            for abi in "${abis[@]}" universal; do
+              apk=""
+              for candidate in "${apks[@]}"; do
+                [[ "$candidate" == "app-$abi-$build_type.apk" || "$candidate" == "app-$abi-$build_type-unsigned.apk" ]] &&
+                  apk="$candidate"
+              done
+              if [[ -z "$apk" ]]; then
+                echo "::error::$build_type: no APK for $abi: ${apks[*]}"
+                exit 1
+              fi
+              want="$abi"
+              [[ "$abi" == universal ]] && want="$want_universal"
+              got="$({ unzip -Z1 "$out/$apk" 'lib/*/libtg_ws_proxy_jni.so' || true; } | cut -d/ -f2 | sort)"
+              if [[ "$got" != "$want" ]]; then
+                echo "::error::$out/$apk carries libtg_ws_proxy_jni.so for" \
+                  "[$(tr '\n' ' ' <<<"$got")], expected [$(tr '\n' ' ' <<<"$want")]"
+                exit 1
+              fi
+            done
+          done
+
+      # The globs need no change for the splits: they already take every APK in
+      # each directory, which is now four instead of one.
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:

@@ -85,6 +85,32 @@ pluginManager.withPlugin("com.android.application") {
             jniLibs.directories.add(generatedJniLibsDir.get().asFile.absolutePath)
         }
 
+        // One APK per ABI plus a universal one. A GitHub release cannot pick an
+        // ABI for the downloader the way Play does, so the universal APK stays
+        // the "just download it" artifact and the per-ABI ones are the roughly
+        // one-third-size alternative for anyone who knows their device. The
+        // include set comes from the same provider as defaultConfig.ndk
+        // .abiFilters above: a split for an ABI cargoNdk never cross-compiled
+        // still builds and installs, then dies in System.loadLibrary on first
+        // launch, so the two lists must not be allowed to drift apart.
+        splits {
+            abi {
+                isEnable = true
+                // AGP's default include set is every ABI it knows about, and
+                // include() only adds to it, so without reset() a narrowed
+                // TG_ANDROID_ABIS would still demand splits for the ABIs it
+                // deliberately excluded.
+                reset()
+                include(*rustAbisProvider.get().toTypedArray())
+                // Deliberately no per-ABI versionCode offsets: those exist so
+                // Play can pick one APK out of a multi-APK listing, and these
+                // are downloaded by filename instead. One shared versionCode
+                // also makes moving between the universal APK and a split an
+                // in-place update rather than a blocked downgrade.
+                isUniversalApk = true
+            }
+        }
+
         if (signing.isConfigured.get()) {
             signingConfigs.register("release") {
                 storeFile = File(signing.storeFile.get())

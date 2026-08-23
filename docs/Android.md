@@ -53,7 +53,10 @@ gradlew.bat :app:assembleDebug
 
 The Gradle `:app:cargoNdk` task cross-compiles `libtg_ws_proxy_jni.so` first and
 puts generated libraries under `android/app/build/generated/rustJniLibs`. The
-debug APK lands at `android/app/build/outputs/apk/debug/app-debug.apk`.
+debug APKs land in `android/app/build/outputs/apk/debug/`: one per ABI
+(`app-arm64-v8a-debug.apk`, `app-armeabi-v7a-debug.apk`, `app-x86_64-debug.apk`)
+plus `app-universal-debug.apk`, which carries every ABI at roughly three times
+the size. `output-metadata.json` in the same directory lists what was written.
 
 The embedded native library is built in release mode even for a debug APK. A
 debug `.so` is roughly 90 MB per ABI and too slow for normal proxy use. Override
@@ -75,8 +78,9 @@ cd android
 ./gradlew :app:assembleRelease
 ```
 
-The output is `android/app/build/outputs/apk/release/app-release-unsigned.apk`
-unless a keystore is configured.
+The outputs are the same per-ABI plus universal set under
+`android/app/build/outputs/apk/release/`, named `app-<abi>-release-unsigned.apk`
+unless a keystore is configured and `app-<abi>-release.apk` when one is.
 
 ## Signing a release
 
@@ -125,7 +129,9 @@ TG_ANDROID_ABIS=arm64-v8a,x86_64 ./gradlew :app:cargoNdk
 ```
 
 The supported ABI names are `arm64-v8a`, `armeabi-v7a`, `x86_64`, and `x86`.
-The APK default remains `arm64-v8a`, `armeabi-v7a`, and `x86_64`.
+The APK default remains `arm64-v8a`, `armeabi-v7a`, and `x86_64`. The split set
+follows the same list, so `TG_ANDROID_ABIS=arm64-v8a` yields exactly
+`app-arm64-v8a-debug.apk` and a universal APK holding only that one ABI.
 
 ## CI
 
