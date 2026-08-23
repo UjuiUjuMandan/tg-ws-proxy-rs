@@ -229,7 +229,17 @@ fn start_proxy(args: &str) -> Result<(), String> {
         .spawn(move || {
             let rt = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
+                // The default is one worker per core, i.e. 8+ threads with
+                // stacks on a modern phone for an accept loop.  Two is enough
+                // and is the right floor: nothing on a worker blocks (DNS goes
+                // to the blocking pool via `lookup_host`), but the per-packet
+                // AES-CTR and SHA-256 work is real CPU time, so a second
+                // worker stays parked to drive the shared IO driver while the
+                // first is mid-burst.
+                .worker_threads(2)
                 .thread_name("tg-ws-worker")
+                .on_thread_start(attach_runtime_thread)
+                .on_thread_stop(detach_runtime_thread)
                 .build()
             {
                 Ok(rt) => rt,
@@ -450,6 +460,38 @@ fn call_static_void(method: &str) {
     });
 }
 
+/// Attach a Tokio runtime thread to the JVM as it starts.
+///
+/// [`jni::JavaVM::attach_current_thread`] requests a *permanent* attachment
+/// (jni's `AttachConfig::scoped` defaults to false), tracked in the crate's own
+/// thread-local, so this is not about avoiding an attach per log line —
+/// [`call_static_impl`] already pays that only once per thread.  It is about
+/// tokio's blocking-pool threads, which are created on demand and reaped after
+/// ten idle seconds: every replacement thread that logged used to pay a full
+/// `AttachCurrentThread` on its first line.  Doing it here instead makes the
+/// attachment lifetime match the thread's, for workers and pool threads alike
+/// (tokio spawns its multi-thread workers onto the blocking pool, so both kinds
+/// run this callback).
+fn attach_runtime_thread() {
+    if let Some(vm) = JVM.get() {
+        let _ = vm.attach_current_thread(|_env| jni::errors::Result::Ok(()));
+    }
+}
+
+/// Detach explicitly rather than leaving it to the thread-local destructor, so
+/// a pool thread the runtime is recycling is off the JVM's books before it
+/// exits.  Safe here because tokio runs this after the pool loop has returned:
+/// no `Env` or `AttachGuard` is left on the stack, which is the one case
+/// `detach_current_thread` refuses.
+fn detach_runtime_thread() {
+    if let Some(vm) = JVM.get() {
+        let _ = vm.detach_current_thread();
+    }
+}
+
+/// Left deliberately self-attaching: most startup lines are emitted from the
+/// "tg-ws-proxy" thread that drives `block_on`, which the runtime did not
+/// create and [`attach_runtime_thread`] therefore never sees.
 fn call_static_impl(
     call: impl for<'l> FnOnce(
         &mut jni::Env<'l>,
