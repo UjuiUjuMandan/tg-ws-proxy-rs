@@ -54,6 +54,8 @@ struct ProxyState {
     /// must see `nativeIsRunning() == false` the moment Stop is pressed, or
     /// `ACTION_START` would repaint "Running" over a proxy with no listener,
     /// while [`start_proxy`] must keep refusing until the old runtime is gone.
+    /// Only [`start_proxy`] ever clears it, so between a Stop and the next
+    /// Start `nativeIsRunning()` answers false whatever the worker is doing.
     stopping: bool,
 }
 
@@ -267,17 +269,29 @@ fn start_proxy(args: &str) -> Result<(), String> {
                 .await
             });
 
+            // Wind down first, report second.  Reporting here would be true
+            // about the port — the listener was dropped when `block_on`
+            // returned — but not about the shim: `start_proxy` refuses with
+            // "proxy is still stopping" until this thread is finished, and
+            // Kotlin turns a reported stop straight into a "Start" button, so
+            // reporting first meant Stop, "Stopped", Start, red error, nothing
+            // started.  A reported stop has to mean startable.
+            //
+            // `shutdown_timeout` rather than a plain `drop(rt)`, which would
+            // block indefinitely on an outstanding blocking task (a stuck
+            // `getaddrinfo`).  So the cost of the new order is bounded: if
+            // teardown really takes the full two seconds, the app keeps saying
+            // "Running" for those two seconds, which is what is actually
+            // happening.  `stop_proxy` still returns to the main thread at
+            // once; only this report waits.
+            rt.shutdown_timeout(Duration::from_secs(2));
+
+            // Last statement in the thread body on purpose: whatever Kotlin
+            // does on the callback, `thread.is_finished()` is a return away.
             match result {
                 Ok(()) => emit_stopped(),
                 Err(e) => emit_error(&format!("proxy failed: {e}")),
             }
-
-            // Report first, wind down second: the listener was dropped when
-            // `block_on` returned, so the port is already free and the app can
-            // be told at once.  What is left is the runtime's own teardown,
-            // which a plain `drop(rt)` would let block indefinitely on an
-            // outstanding blocking task (a stuck `getaddrinfo`); this bounds it.
-            rt.shutdown_timeout(Duration::from_secs(2));
         })
         .map_err(|e| format!("failed to spawn proxy thread: {e}"))?;
 
