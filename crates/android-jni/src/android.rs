@@ -15,7 +15,9 @@ use jni::strings::JNIString;
 use jni::sys::{JNI_FALSE, JNI_TRUE, JNI_VERSION_1_6, jboolean, jstring};
 use jni::{EnvUnowned, Outcome, jni_sig};
 use tokio::sync::watch;
-use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
+use tracing_subscriber::{EnvFilter, Registry, fmt::MakeWriter, reload};
 
 use tg_ws_proxy_rs::config::Config;
 use tg_ws_proxy_rs::server;
@@ -26,6 +28,18 @@ static JVM: OnceLock<jni::JavaVM> = OnceLock::new();
 /// Tokio worker sees only the system loader, which cannot see `NativeProxy`
 /// and leaves a pending `ClassNotFoundException` that kills the process.
 static NATIVE_CLASS: OnceLock<Global<JClass<'static>>> = OnceLock::new();
+
+/// Reload handle for the `EnvFilter` installed by [`install_logging`].
+///
+/// A global subscriber can only be set once per process, so every Start after
+/// the first has to swap the filter through this handle instead: with
+/// `--quiet` in the app's default arguments the second `try_init` used to fail
+/// silently, which left the Log panel permanently empty and made dropping
+/// `--quiet` from the arguments field do nothing until the process was killed.
+///
+/// The `S` parameter is the subscriber the layer is registered on; the filter
+/// is the first `.with()` on a bare `Registry`, so it is simply `Registry`.
+static LOG_FILTER: OnceLock<reload::Handle<EnvFilter, Registry>> = OnceLock::new();
 
 /// Signatures of the static Kotlin callbacks (`onNativeLog`, `onNativeError`,
 /// `onNativeListening`, `onNativeStopped`), parsed at compile time.
@@ -292,12 +306,31 @@ fn install_logging(config: &Config) {
     let env_filter =
         tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| log_level.into());
 
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .with_ansi(false)
-        .with_target(false)
-        .with_writer(AndroidMakeWriter)
-        .try_init();
+    if let Some(handle) = LOG_FILTER.get() {
+        // Reloading also rebuilds tracing's interest cache, which recomputes
+        // the global max level — without that a first Start at `off` would pin
+        // it to OFF and no later `info!` would ever reach a callsite.
+        let _ = handle.reload(env_filter);
+        return;
+    }
+
+    let (filter, handle) = reload::Layer::new(env_filter);
+    // `Registry` + `fmt::layer()` is the same stack the `fmt()` builder used,
+    // so the line format is unchanged; it is spelled out only because the
+    // builder gives no way to wrap its filter in a reloadable layer.
+    let installed = Registry::default()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_target(false)
+                .with_writer(AndroidMakeWriter),
+        )
+        .try_init()
+        .is_ok();
+    if installed {
+        let _ = LOG_FILTER.set(handle);
+    }
 }
 
 struct AndroidMakeWriter;
