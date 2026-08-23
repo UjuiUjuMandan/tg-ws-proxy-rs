@@ -172,6 +172,115 @@ jobs:
             done
           done
 
+      # A JNI entry point is bound by name at the first call, not at link time,
+      # so the Kotlin package and the Rust `Java_...` symbols are a contract
+      # nothing in the build path enforces. Rename one side only and the app
+      # still compiles, packages, installs and starts — then dies with an
+      # UnsatisfiedLinkError the moment someone taps Start. That is precisely
+      # the failure the io.github.valnesfjord.tgwsproxyrs rename risked, so
+      # derive the names the runtime will look for from the namespace and check
+      # them against the .so that actually shipped.
+      - name: Check the packaged JNI symbols
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          namespace="$(sed -n 's/^ *namespace *= *"\(.*\)"$/\1/p' app/build.gradle.kts)"
+          if [[ ! "$namespace" =~ ^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$ ]]; then
+            echo "::error file=android/app/build.gradle.kts::could not read a package" \
+              "name out of the android.namespace line, got '$namespace'"
+            exit 1
+          fi
+
+          # JNI's mangling, in the order the spec applies it: a literal '_'
+          # inside a package or class name becomes '_1', and only then does '.'
+          # become '_'. Escaping the separators first would mangle them too.
+          # The current package has no '_' left, which was the point of the
+          # rename — keeping the rule here is what makes this check correct
+          # rather than accidentally right if the package ever grows one back.
+          mangled="${namespace//_/_1}"
+          mangled="${mangled//./_}"
+
+          out=app/build/outputs/apk/release
+          # The universal APK carries every ABI, so one unzip covers all three
+          # .so files. The step above already asserted this file exists under
+          # one of the two names AGP picks depending on the signing config.
+          apk=""
+          while read -r candidate; do
+            [[ "$candidate" == "app-universal-release.apk" ||
+               "$candidate" == "app-universal-release-unsigned.apk" ]] && apk="$candidate"
+          done < <(jq -r '.elements[].outputFile' "$out/output-metadata.json")
+          if [[ -z "$apk" ]]; then
+            echo "::error::$out holds no universal release APK"
+            exit 1
+          fi
+
+          work="$(mktemp -d)"
+          # unzip exits 11 when the pattern matches nothing, which is a real
+          # failure here but a bare exit code as a message; let it through so
+          # the check below can name what is actually wrong.
+          unzip -q "$out/$apk" 'lib/*/libtg_ws_proxy_jni.so' -d "$work" || [[ "$?" -eq 11 ]]
+
+          libs=("$work"/lib/*/libtg_ws_proxy_jni.so)
+          if [[ "${#libs[@]}" -eq 0 ]]; then
+            echo "::error::$out/$apk carries no libtg_ws_proxy_jni.so"
+            exit 1
+          fi
+
+          for so in "${libs[@]}"; do
+            # readelf and not nm: this runner is x86_64 and two of the three
+            # libraries are not. GNU nm goes through BFD, which is configured
+            # per host and need not recognise a foreign architecture; readelf
+            # parses the ELF itself and reads every target. It is preinstalled,
+            # so this also needs no NDK path.
+            #
+            # .dynsym and not .symtab: [profile.release] sets strip = true, so
+            # .symtab is gone — and .dynsym is what the dynamic linker resolves
+            # against anyway, which makes it the table that decides whether the
+            # app works.
+            mapfile -t exported < <(readelf -W --dyn-syms "$so" |
+              awk '$4 == "FUNC" && $5 == "GLOBAL" && $7 != "UND" { print $8 }')
+            for entry in nativeStart nativeStop nativeIsRunning; do
+              want="Java_${mangled}_NativeProxy_${entry}"
+              if ! printf '%s\n' "${exported[@]}" | grep -Fxq -- "$want"; then
+                echo "::error::${so#"$work"/} does not export $want;" \
+                  "crates/android-jni/src/android.rs must follow $namespace"
+                printf '%s\n' "${exported[@]}" | grep -F -- 'Java_' ||
+                  echo "  (the library exports no Java_ symbol at all)"
+                exit 1
+              fi
+            done
+
+            # JNI_OnLoad caches the callback class by name (NATIVE_CLASS_NAME in
+            # crates/android-jni/src/android.rs), which the symbol names above
+            # cannot cover: a stale literal there passes every check so far and
+            # then fails on the device, at load, with a ClassNotFoundException.
+            if ! grep -qa -- "$(tr . / <<<"$namespace")/NativeProxy" "$so"; then
+              echo "::error::${so#"$work"/} has no NATIVE_CLASS_NAME matching $namespace"
+              exit 1
+            fi
+          done
+
+          # R8 keeps the four Kotlin callbacks only because proguard-rules.pro
+          # names the class — spelled out as a string, so it is a third place
+          # the package name has to reach. assembleRelease succeeds with a stale
+          # rule; the app then starts, binds every symbol above, and silently
+          # never delivers a log line or a tg:// link.
+          #
+          # Extracted to a file rather than piped into grep: `grep -q` exits on
+          # the first match, and the SIGPIPE that gives unzip would fail the
+          # pipeline under `set -o pipefail` on success.
+          unzip -p "$out/$apk" 'classes*.dex' > "$work/classes.dex"
+          for callback in onNativeLog onNativeListening onNativeError onNativeStopped; do
+            if ! grep -qa -- "$callback" "$work/classes.dex"; then
+              echo "::error::$out/$apk: R8 stripped $callback;" \
+                "check app/proguard-rules.pro against $namespace"
+              exit 1
+            fi
+          done
+
       # The globs need no change for the splits: they already take every APK in
       # each directory, which is now four instead of one.
       - name: Upload APKs
