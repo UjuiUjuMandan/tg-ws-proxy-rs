@@ -92,7 +92,11 @@ class ProxyViewModel(application: Application) : AndroidViewModel(application) {
         val intent = Intent(Intent.ACTION_VIEW, uri).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        getApplication<Application>().startActivity(intent)
+        try {
+            getApplication<Application>().startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            ProxyBridge.reportMessage(getApplication<Application>().getString(R.string.browser_missing))
+        }
     }
 
     companion object {

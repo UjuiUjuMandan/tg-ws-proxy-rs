@@ -80,7 +80,7 @@ fun ProxyScreen(viewModel: ProxyViewModel) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.app_name)) },
+                title = { Text(stringResource(R.string.app_title)) },
                 actions = {
                     IconButton(onClick = viewModel::openRepo) {
                         Icon(
