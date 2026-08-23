@@ -1,4 +1,4 @@
-package com.github.valnesfjord.tg_ws_proxy_rs.ui
+package io.github.valnesfjord.tgwsproxyrs.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -40,8 +40,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.github.valnesfjord.tg_ws_proxy_rs.ProxyViewModel
-import com.github.valnesfjord.tg_ws_proxy_rs.R
+import io.github.valnesfjord.tgwsproxyrs.ProxyViewModel
+import io.github.valnesfjord.tgwsproxyrs.R
 
 @Composable
 fun TgWsTheme(content: @Composable () -> Unit) {

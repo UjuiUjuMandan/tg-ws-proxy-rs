@@ -1,4 +1,4 @@
-package com.github.valnesfjord.tg_ws_proxy_rs
+package io.github.valnesfjord.tgwsproxyrs
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -12,8 +12,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.LaunchedEffect
 import androidx.core.content.ContextCompat
-import com.github.valnesfjord.tg_ws_proxy_rs.ui.ProxyScreen
-import com.github.valnesfjord.tg_ws_proxy_rs.ui.TgWsTheme
+import io.github.valnesfjord.tgwsproxyrs.ui.ProxyScreen
+import io.github.valnesfjord.tgwsproxyrs.ui.TgWsTheme
 
 class MainActivity : ComponentActivity() {
     private val viewModel: ProxyViewModel by viewModels()

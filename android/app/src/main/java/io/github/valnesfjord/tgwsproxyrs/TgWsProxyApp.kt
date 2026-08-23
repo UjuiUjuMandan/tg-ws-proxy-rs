@@ -1,4 +1,4 @@
-package com.github.valnesfjord.tg_ws_proxy_rs
+package io.github.valnesfjord.tgwsproxyrs
 
 import android.app.Application
 
