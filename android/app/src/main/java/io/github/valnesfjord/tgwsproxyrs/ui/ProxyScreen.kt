@@ -71,7 +71,13 @@ fun ProxyScreen(viewModel: ProxyViewModel) {
         derivedStateOf { !listState.canScrollForward }
     }
 
-    LaunchedEffect(logs.size) {
+    // Keyed on the newest line's id rather than on `logs.size`: the buffer is
+    // capped, and its collector appends and trims the oldest line back to back
+    // with no suspension between them, so from the 501st line on the size is
+    // permanently 500 and Compose never even observes the intermediate 501.
+    // A key that stops changing there would freeze the view at the cap while
+    // new lines kept arriving off-screen, with no way back into following.
+    LaunchedEffect(logs.lastOrNull()?.id) {
         if (following && logs.isNotEmpty()) {
             listState.scrollToItem(logs.lastIndex)
         }
