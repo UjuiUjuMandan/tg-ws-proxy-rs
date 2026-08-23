@@ -1,7 +1,7 @@
 //! JNI surface for the Android app.
 //!
 //! Intentionally tiny: parse the same CLI string the binary accepts, run
-//! [`crate::server`] on a background Tokio runtime, and push log lines plus
+//! [`tg_ws_proxy_rs::server`] on a background Tokio runtime, and push log lines plus
 //! the `tg://` link back into Kotlin.  Start/stop is cooperative — completing
 //! the watch channel breaks the accept loop the same way a Ctrl+C would.
 
@@ -16,8 +16,8 @@ use jni::{EnvUnowned, Outcome, jni_sig};
 use tokio::sync::watch;
 use tracing_subscriber::fmt::MakeWriter;
 
-use crate::config::Config;
-use crate::server;
+use tg_ws_proxy_rs::config::Config;
+use tg_ws_proxy_rs::server;
 
 static JVM: OnceLock<jni::JavaVM> = OnceLock::new();
 /// Cached in [`JNI_OnLoad`] / the first `native*` call, while the thread still

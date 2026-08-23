@@ -1,0 +1,27 @@
+[package]
+name = "tg-ws-proxy-jni"
+# Deliberately not the root version: the root Cargo.toml's `package.version` is
+# the repo's single source of truth (CI's release-version job and the Android
+# versionName both parse it), and a second number to bump would only drift.
+version = "0.0.0"
+edition = "2024"
+description = "JNI shim that runs tg-ws-proxy-rs inside the Android app"
+license = "MIT"
+publish = false
+
+[lib]
+# The .so filename the app loads: keep in sync with `System.loadLibrary` in
+# NativeProxy.kt and LIBRARY_FILE in CargoNdkBuildTask.kt. It must differ from
+# the root crate's `tg_ws_proxy_rs`: cargo does not reject two lib targets with
+# the same name in one workspace, they silently overwrite each other's `.d`
+# file (rust-lang/cargo#6313).
+name = "tg_ws_proxy_jni"
+crate-type = ["cdylib"]
+
+[dependencies]
+tg-ws-proxy-rs = { path = "../.." }
+
+# Gated so a host `cargo fmt` / `cargo metadata` / `-p` build still resolves
+# this crate without an NDK; `jni` is unbuildable off Android.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.22", default-features = false }

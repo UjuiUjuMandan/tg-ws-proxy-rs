@@ -1,7 +1,7 @@
 package com.github.valnesfjord.tg_ws_proxy_rs
 
 /**
- * JNI boundary for `src/android.rs`.
+ * JNI boundary for `crates/android-jni/src/android.rs`.
  *
  * The native side calls [onNativeLog], [onNativeListening], [onNativeError]
  * and [onNativeStopped] on whichever thread the Tokio runtime happens to be
@@ -9,7 +9,7 @@ package com.github.valnesfjord.tg_ws_proxy_rs
  */
 object NativeProxy {
     init {
-        System.loadLibrary("tg_ws_proxy_rs")
+        System.loadLibrary("tg_ws_proxy_jni")
     }
 
     fun load() {

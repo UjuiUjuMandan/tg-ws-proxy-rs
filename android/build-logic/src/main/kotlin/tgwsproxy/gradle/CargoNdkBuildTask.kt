@@ -30,13 +30,23 @@ abstract class CargoNdkBuildTask @Inject constructor(
     @get:Internal
     abstract val repoRoot: DirectoryProperty
 
+    // The root crate's sources: the shim links it, so a change here must
+    // invalidate the task too.
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val rustSources: DirectoryProperty
 
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val jniSources: DirectoryProperty
+
     @get:InputFile
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val cargoToml: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val jniCargoToml: RegularFileProperty
 
     @get:InputFile
     @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -118,7 +128,17 @@ abstract class CargoNdkBuildTask @Inject constructor(
 
             val targetEnv = triple.uppercase(Locale.US).replace("-", "_")
             val ccEnv = triple.replace("-", "_")
-            val cargoArgs = mutableListOf("build", "--lib", "--target", triple, "--locked")
+            // The workspace's default-members is the root package alone, so the
+            // cdylib has to be named: a bare `--lib` builds the root rlib.
+            val cargoArgs = mutableListOf(
+                "build",
+                "--package",
+                CARGO_PACKAGE,
+                "--lib",
+                "--target",
+                triple,
+                "--locked",
+            )
             if (rustProfile == "release") {
                 cargoArgs += "--release"
             }
@@ -136,15 +156,23 @@ abstract class CargoNdkBuildTask @Inject constructor(
                 commandLine(NdkLocator.hostExecutable("cargo"), *cargoArgs.toTypedArray())
             }
 
-            val artifact = root.resolve("target/$triple/$artifactDir/libtg_ws_proxy_rs.so")
+            val artifact = root.resolve("target/$triple/$artifactDir/$LIBRARY_FILE")
             if (!artifact.isFile) {
                 throw GradleException("Cargo did not produce ${artifact.absolutePath}")
             }
 
-            val destination = outputRoot.resolve("$abi/libtg_ws_proxy_rs.so")
+            val destination = outputRoot.resolve("$abi/$LIBRARY_FILE")
             destination.parentFile.mkdirs()
             Files.copy(artifact.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
             logger.lifecycle("  -> ${destination.absolutePath}")
         }
+    }
+
+    private companion object {
+        const val CARGO_PACKAGE = "tg-ws-proxy-jni"
+
+        // Set by `[lib] name` in crates/android-jni/Cargo.toml and passed to
+        // System.loadLibrary in NativeProxy.kt. The three move together.
+        const val LIBRARY_FILE = "libtg_ws_proxy_jni.so"
     }
 }

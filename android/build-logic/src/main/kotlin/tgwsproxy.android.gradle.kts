@@ -15,7 +15,7 @@ val repositoryRoot = layout.settingsDirectory.dir("..")
 val generatedJniLibsDir = layout.buildDirectory.dir("generated/rustJniLibs")
 
 // Native code is always release unless TG_ANDROID_RUST_PROFILE=debug because a
-// debug libtg_ws_proxy_rs.so is roughly 90 MB per ABI and too slow for a proxy.
+// debug libtg_ws_proxy_jni.so is roughly 90 MB per ABI and too slow for a proxy.
 val rustProfileProvider = providers.environmentVariable("TG_ANDROID_RUST_PROFILE").orElse("release")
 val rustAbisProvider = providers.environmentVariable("TG_ANDROID_ABIS")
     .map { value -> value.split(Regex("[,\\s]+")).filter(String::isNotBlank) }
@@ -46,10 +46,12 @@ val signing = providers.releaseSigning(layout.settingsDirectory.file("keystore.p
 
 val cargoNdk = tasks.register<CargoNdkBuildTask>("cargoNdk") {
     group = "build"
-    description = "Cross-compile libtg_ws_proxy_rs.so into generated Android jniLibs"
+    description = "Cross-compile libtg_ws_proxy_jni.so into generated Android jniLibs"
     repoRoot.set(repositoryRoot)
     rustSources.set(repositoryRoot.dir("src"))
+    jniSources.set(repositoryRoot.dir("crates/android-jni/src"))
     cargoToml.set(repositoryRoot.file("Cargo.toml"))
+    jniCargoToml.set(repositoryRoot.file("crates/android-jni/Cargo.toml"))
     cargoLock.set(repositoryRoot.file("Cargo.lock"))
     cargoConfig.fileProvider(
         providers.provider {

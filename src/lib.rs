@@ -11,6 +11,3 @@ pub mod runtime;
 pub mod server;
 pub mod splitter;
 pub mod ws_client;
-
-#[cfg(target_os = "android")]
-mod android;

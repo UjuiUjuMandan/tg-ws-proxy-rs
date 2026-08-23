@@ -1048,6 +1048,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tg-ws-proxy-jni"
+version = "0.0.0"
+dependencies = [
+ "jni",
+ "tg-ws-proxy-rs",
+]
+
+[[package]]
 name = "tg-ws-proxy-rs"
 version = "2.3.0"
 dependencies = [
@@ -1061,7 +1069,6 @@ dependencies = [
  "hmac",
  "httparse",
  "ipnet",
- "jni",
  "percent-encoding",
  "proxyvars",
  "rand 0.9.5",

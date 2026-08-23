@@ -51,7 +51,7 @@ cd android
 gradlew.bat :app:assembleDebug
 ```
 
-The Gradle `:app:cargoNdk` task cross-compiles `libtg_ws_proxy_rs.so` first and
+The Gradle `:app:cargoNdk` task cross-compiles `libtg_ws_proxy_jni.so` first and
 puts generated libraries under `android/app/build/generated/rustJniLibs`. The
 debug APK lands at `android/app/build/outputs/apk/debug/app-debug.apk`.
 
@@ -145,10 +145,17 @@ above.
 ## What the core change is
 
 `src/server.rs` is the accept loop that used to live only in `main.rs`. The
-Android JNI module (`src/android.rs`, compiled only for `target_os = "android"`)
-parses the text field with `Config::try_from_cli_line` and runs that loop on a
-background Tokio runtime. Stop completes a watch channel, which breaks the
-accept loop.
+Android JNI module is its own crate, `crates/android-jni` (compiled only for
+`target_os = "android"`), which parses the text field with
+`Config::try_from_cli_line` and runs that loop on a background Tokio runtime.
+Stop completes a watch channel, which breaks the accept loop.
+
+It is a separate crate and not a `cdylib` on the root library because
+`crate-type` is a per-package setting: with the shim in the root crate every
+desktop and Docker `cargo build` also linked an `.so` nobody loads. The
+workspace's `default-members` is the root package alone, so `cargo
+build`/`test`/`clippy` at the repository root never touch it; `:app:cargoNdk`
+selects it with `cargo build -p tg-ws-proxy-jni --lib`.
 
 The proxy keeps running in a foreground service so Android does not kill it
 when you switch to Telegram.

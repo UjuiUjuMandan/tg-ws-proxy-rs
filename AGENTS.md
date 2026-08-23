@@ -21,7 +21,6 @@ MTProto proxy, and raw TCP as successive fallbacks.
 src/
   main.rs              Thin CLI wrapper: clap parse, tracing, then server::run
   server.rs            Process-level bind / banner / accept loop (shared by the binary and embedders)
-  android.rs           JNI start/stop + log callback; compiled only for target_os = "android"
   config.rs            clap-derived Config struct; all CLI flags + TG_* env var fallbacks
   proxy.rs              Core per-connection logic: client handshake, DC routing, WS/CF/TCP fallback chain
   crypto.rs             MTProto obfuscated-transport crypto (AES-256-CTR key derivation, secret layout)
@@ -43,6 +42,7 @@ docs/                    User-facing guides. README stays an overview and links 
                          (Docker, OpenWrt, env vars), CfProxy.md + CfWorker.md (Cloudflare setup),
                          Android.md (Compose app + NDK build)
 android/                 Jetpack Compose app (Gradle catalog + build-logic convention; see docs/Android.md)
+crates/android-jni/      JNI start/stop + log callback cdylib; built only by the Android Gradle task
 ```
 
 Modules whose *private* internals need testing keep a `#[cfg(test)] mod tests;` in a sibling
