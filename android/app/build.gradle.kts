@@ -23,4 +23,19 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.core.ktx)
     debugImplementation(libs.androidx.compose.ui.tooling)
+
+    // Instrumentation tests only; nothing here touches Compose, so no Compose
+    // test artifacts are needed.
+    //
+    // Do NOT add androidx.test:orchestrator (or clearPackageData): it runs each
+    // test method in a fresh process, which would hand every test a fresh
+    // global tracing subscriber and mask the exact bug
+    // NativeProxyContractTest.logLevelIsReloadedOnEveryStart exists to catch.
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    // The tests observe ProxyBridge's flows; declare coroutines rather than
+    // inherit it, so the test source set does not depend on which app
+    // dependency happens to expose it.
+    androidTestImplementation(libs.kotlinx.coroutines.android)
 }

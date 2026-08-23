@@ -75,6 +75,11 @@ pluginManager.withPlugin("com.android.application") {
             targetSdk = libs.findVersion("targetSdk").get().requiredVersion.toInt()
             versionCode = cargoVersion.versionCode.get()
             versionName = cargoVersion.versionName.get()
+            // AGP 9 defaults this to the AndroidX runner, but the ABI splits
+            // below mean the instrumentation tests are the only check that the
+            // packaged .so is the one the device can load — too load-bearing to
+            // leave resting on a flag's default value.
+            testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
             ndk {
                 abiFilters += rustAbisProvider.get()
             }
