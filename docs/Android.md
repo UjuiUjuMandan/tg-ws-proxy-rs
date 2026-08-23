@@ -144,9 +144,29 @@ both the `sdkmanager --install` line and the `ANDROID_NDK_HOME` export together
 if you bump the pin. The Rust toolchain comes from `dtolnay/rust-toolchain`,
 and `Swatinem/rust-cache` keeps the Android cross-compile outputs across runs.
 
-The release pipeline does not publish an APK; the signing key is
-maintainer-held, so a signed APK is produced manually with the instructions
-above.
+The `android` job in `.github/workflows/release.yml` attaches the whole APK set
+to every release, named `tg-ws-proxy-rs-android-<version>-<abi>.apk` — the
+`-android-` is there because the OpenWrt LuCI packages on the same release page
+are also called `.apk`. It runs beside `upload-assets` rather than after it, and
+`publish-release` waits on it, so a failed APK build leaves the release a draft
+instead of publishing one without an APK.
+
+Signing is optional and off by default. With none of the secrets below set, the
+job still succeeds and uploads
+`tg-ws-proxy-rs-android-<version>-<abi>-unsigned.apk`, which Android will not
+install without `adb install` and a manual signature — that is the current state
+of this repository. To ship signed APKs, create four repository secrets:
+
+| Secret | Value |
+| --- | --- |
+| `TG_ANDROID_KEYSTORE_BASE64` | the keystore itself, base64-encoded: `base64 -w0 keystore.jks` on Linux, `base64 -i keystore.jks` on macOS |
+| `TG_ANDROID_STORE_PASSWORD` | `storePassword` |
+| `TG_ANDROID_KEY_ALIAS` | `keyAlias` |
+| `TG_ANDROID_KEY_PASSWORD` | `keyPassword` |
+
+`TG_ANDROID_STORE_FILE` is deliberately not a secret: it is a path, and the
+workflow computes it when it decodes the keystore into the runner's temporary
+directory (mode 600, deleted when the job ends).
 
 ## What the core change is
 

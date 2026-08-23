@@ -133,6 +133,118 @@ jobs:
                   tar -C "${TMPDIR}" -czf "${NAME}.tar.gz" tg-ws-proxy
                   gh release upload "$TAG" "${NAME}.tar.gz" --clobber
 
+    # Needs `create-release` and nothing else: the APKs share no artifact with
+    # the musl builds, so this runs beside `upload-assets` rather than behind
+    # it and costs the release roughly no extra wall clock. `publish-release`
+    # lists it, which is what makes a failure here leave a draft instead of a
+    # published release that silently shipped without an APK -- how 2.3.0 would
+    # otherwise have gone out.
+    android:
+        needs: create-release
+        runs-on: ubuntu-latest
+        env:
+            # A secret that does not exist expands to the empty string, and
+            # ReleaseSigning drops blank values before deciding whether signing
+            # is configured, so with none of these set the job still succeeds
+            # and uploads honestly-named `-unsigned` APKs. That is the state of
+            # the repository today; see docs/Android.md for the four secrets a
+            # maintainer creates to turn it into a signed build.
+            TG_ANDROID_KEYSTORE_BASE64: ${{ secrets.TG_ANDROID_KEYSTORE_BASE64 }}
+            TG_ANDROID_STORE_PASSWORD: ${{ secrets.TG_ANDROID_STORE_PASSWORD }}
+            TG_ANDROID_KEY_ALIAS: ${{ secrets.TG_ANDROID_KEY_ALIAS }}
+            TG_ANDROID_KEY_PASSWORD: ${{ secrets.TG_ANDROID_KEY_PASSWORD }}
+        steps:
+            - uses: actions/checkout@v6
+
+            - name: Set up JDK 17
+              uses: actions/setup-java@v5
+              with:
+                  distribution: temurin
+                  java-version: "17"
+
+            # Performs the Gradle wrapper JAR checksum validation, same as CI.
+            - name: Set up Gradle
+              uses: gradle/actions/setup-gradle@v4
+
+            # The runner images ship a single NDK and bump it without notice,
+            # which silently changes the toolchain the native library is built
+            # with. Pinned in three places that must move together: here, the
+            # `android` and `android-emulator` jobs in .github/workflows/ci.yml,
+            # and docs/Android.md.
+            - name: Install pinned Android NDK
+              run: |
+                  set -euo pipefail
+                  ndk="ndk;28.1.13356709"
+                  "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "$ndk"
+                  echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.1.13356709" >> "$GITHUB_ENV"
+
+            - name: Set up Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            # A keystore is a binary file, so the secret carries it base64-encoded
+            # and only the path reaches Gradle. No `set -x` anywhere in this job:
+            # the trace would put the encoded keystore in the log.
+            - name: Decode the release keystore
+              if: ${{ env.TG_ANDROID_KEYSTORE_BASE64 != '' }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  keystore="${RUNNER_TEMP}/release.jks"
+                  # Set before the redirection creates the file, so it is never
+                  # briefly world-readable on a shared runner.
+                  umask 077
+                  printf '%s' "$TG_ANDROID_KEYSTORE_BASE64" | base64 -d > "$keystore"
+                  echo "TG_ANDROID_STORE_FILE=${keystore}" >> "$GITHUB_ENV"
+
+            # Release only: the per-ABI plus universal APK set, R8-minified.
+            - name: Build the release APKs
+              working-directory: android
+              run: ./gradlew :app:assembleRelease
+
+            - name: Stage and upload the APKs
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  version="${GITHUB_REF_NAME#v}"
+                  out=android/app/build/outputs/apk/release
+                  stage="$(mktemp -d)"
+                  count=0
+                  # AGP names the outputs after the module and appends -unsigned
+                  # when no keystore was configured, so read what it actually
+                  # wrote rather than guessing at the suffix -- that is what
+                  # lets the signed and unsigned shapes share one code path.
+                  # `-android-` in the released name because the OpenWrt LuCI
+                  # packages on the same release page are also called .apk.
+                  while read -r file; do
+                      abi="${file#app-}"
+                      abi="${abi%%-release*}"
+                      suffix=""
+                      [[ "$file" == *-unsigned.apk ]] && suffix="-unsigned"
+                      cp "$out/$file" "$stage/tg-ws-proxy-rs-android-${version}-${abi}${suffix}.apk"
+                      count=$((count + 1))
+                  done < <(jq -r '.elements[].outputFile' "$out/output-metadata.json")
+
+                  # Three ABIs plus the universal APK. CI's `android` job owns
+                  # the checks that each one carries the right .so and the right
+                  # JNI symbols; this only guards against uploading a set that
+                  # quietly shrank.
+                  if [[ "$count" -ne 4 ]]; then
+                      echo "::error::expected 4 release APKs, got ${count}"
+                      exit 1
+                  fi
+
+                  gh release upload "${GITHUB_REF_NAME}" "$stage"/*.apk \
+                      --repo "${GITHUB_REPOSITORY}" --clobber
+
+            # RUNNER_TEMP is wiped when the job ends, but only on a healthy
+            # runner; deleting the keystore explicitly does not depend on that.
+            - name: Remove the decoded keystore
+              if: ${{ always() }}
+              shell: bash
+              run: rm -f "${RUNNER_TEMP}/release.jks"
+
     openwrt-luci:
         needs: [create-release, upload-assets, compress-assets]
         runs-on: ubuntu-latest
@@ -311,12 +423,12 @@ jobs:
                   gh release upload "$TAG" "${NAME}-upx.tar.gz" \
                       --repo "${GITHUB_REPOSITORY}" --clobber
 
-    # Every asset job must succeed, so a target or OpenWrt package set that failed
-    # to build leaves the release a draft rather than publishing a half-populated
-    # one. Finish the job by hand (or re-run the failed leg) and the draft is
-    # still there.
+    # Every asset job must succeed, so a target, OpenWrt package set or Android
+    # APK that failed to build leaves the release a draft rather than publishing
+    # a half-populated one. Finish the job by hand (or re-run the failed leg) and
+    # the draft is still there.
     publish-release:
-        needs: [upload-assets, openwrt-luci, compress-assets]
+        needs: [upload-assets, openwrt-luci, compress-assets, android]
         runs-on: ubuntu-latest
         steps:
             - name: Publish the draft now that every asset is uploaded
