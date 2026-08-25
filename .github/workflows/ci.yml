@@ -131,6 +131,10 @@ jobs:
           java-version: "17"
 
       # Performs the Gradle wrapper JAR checksum validation on every run.
+      #
+      # Held at v4 while the artifact and cache actions move on: release.yml
+      # sets Gradle up the same way, and the point of this job is that what it
+      # builds is what the release builds. Bump both together or neither.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
@@ -329,7 +333,7 @@ jobs:
       # The globs need no change for the splits: they already take every APK in
       # each directory, which is now four instead of one.
       - name: Upload APKs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-apks
           if-no-files-found: error
@@ -422,7 +426,7 @@ jobs:
       # off the common path; a cache miss just makes the run slower.
       - name: Cache the AVD snapshot
         id: avd-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.android/avd/*
@@ -517,7 +521,7 @@ jobs:
       # the difference between "flaky" and "diagnosable".
       - name: Upload the connected test report
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-test-report-api${{ matrix.api-level }}
           if-no-files-found: warn
