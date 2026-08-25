@@ -303,8 +303,13 @@ jobs:
               shell: bash
               run: rm -f "${RUNNER_TEMP}/release.jks"
 
+    # Builds its two packages from the tree, not from the musl tarballs, so the
+    # only thing it needs is somewhere to upload them. It used to wait on
+    # `upload-assets` and `compress-assets` because it also built SHA256SUMS out
+    # of the assets they had uploaded; `checksums` owns that now, and this runs
+    # beside them again.
     openwrt-luci:
-        needs: [create-release, upload-assets, compress-assets]
+        needs: create-release
         runs-on: ubuntu-latest
         env:
             APK_VERSION: 25.12.5
@@ -375,24 +380,7 @@ jobs:
                       [[ "$#" -eq 1 && -f "$1" ]]
                   )
 
-            - name: Build shared release checksums
-              env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              shell: bash
-              run: |
-                  set -euo pipefail
-                  final="${PWD}/dist/openwrt"
-                  gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
-                      --pattern 'tg-ws-proxy-*-unknown-linux-musl*.tar.gz' --dir "$final"
-                  (
-                      cd "$final"
-                      set -- tg-ws-proxy-*-unknown-linux-musl*.tar.gz
-                      [[ "$#" -eq 10 ]]
-                      sha256sum -- *.tar.gz *.apk *.ipk > SHA256SUMS
-                      sha256sum -c SHA256SUMS
-                  )
-
-            - name: Upload LuCI packages and checksums
+            - name: Upload the LuCI packages
               env:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               shell: bash
@@ -401,7 +389,6 @@ jobs:
                   gh release upload "${GITHUB_REF_NAME}" \
                       dist/openwrt/luci-app-tg-ws-proxy-rs-*.apk \
                       dist/openwrt/luci-app-tg-ws-proxy-rs_*.ipk \
-                      dist/openwrt/SHA256SUMS \
                       --repo "${GITHUB_REPOSITORY}" --clobber
 
     # Extra UPX-packed assets for flash-constrained devices (OpenWrt routers).
@@ -481,12 +468,78 @@ jobs:
                   gh release upload "$TAG" "${NAME}-upx.tar.gz" \
                       --repo "${GITHUB_REPOSITORY}" --clobber
 
+    # The release publishes exactly one checksum file, so it can only be built
+    # once the last asset has landed -- every job that uploads one is in `needs`.
+    #
+    # This used to live inside `openwrt-luci`, which hashed the files in its own
+    # staging directory plus the musl tarballs it pulled down for that purpose.
+    # Anything uploaded by a job it did not wait on was therefore missing from
+    # SHA256SUMS: the macOS and Windows archives, and -- once the `android` job
+    # existed -- all four APKs. A sideloaded APK is exactly the asset where a
+    # user most needs an out-of-band hash to check, so it shipped without one.
+    #
+    # Hashing what the release serves rather than what each job built is the
+    # trick `compress-assets` already uses to reach the plain tarballs: read the
+    # still-draft release back. It needs no working tree, and it means the
+    # hashes cover the bytes a user actually downloads.
+    checksums:
+        needs: [upload-assets, compress-assets, openwrt-luci, android]
+        # Not `success()`: a failure in one packaging path should surface as a
+        # failing checksum job over a short asset set, not as a release whose
+        # other assets quietly lost their hashes. `publish-release` waits on
+        # this too, so either way the release stays a draft.
+        if: ${{ !cancelled() }}
+        runs-on: ubuntu-latest
+        steps:
+            - name: Hash every asset on the release
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  dir="$(mktemp -d)"
+                  gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+                      --dir "$dir" --clobber
+                  cd "$dir"
+
+                  # A re-run finds the previous SHA256SUMS among the assets, and
+                  # a file cannot list its own hash.
+                  rm -f SHA256SUMS
+
+                  shopt -s nullglob
+                  all=(*)
+                  musl=(tg-ws-proxy-*-unknown-linux-musl*.tar.gz)
+                  apks=(tg-ws-proxy-rs-android-*.apk)
+                  luci=(luci-app-tg-ws-proxy-rs-*.apk luci-app-tg-ws-proxy-rs_*.ipk)
+
+                  # 9 archives from `upload-assets`, 5 `-upx` ones from
+                  # `compress-assets`, 2 LuCI packages, 4 APKs. The total is what
+                  # catches an asset from the four macOS/Windows targets going
+                  # missing without spelling out archive names this job never
+                  # chose; the per-group counts say which path came up short.
+                  if [[ "${#all[@]}" -ne 20 || "${#musl[@]}" -ne 10 ||
+                        "${#apks[@]}" -ne 4 || "${#luci[@]}" -ne 2 ]]; then
+                      echo "::error::release carries ${#all[@]} assets, expected 20: ${#musl[@]}/10 musl tarballs, ${#apks[@]}/4 APKs, ${#luci[@]}/2 LuCI packages"
+                      printf '%s\n' "${all[@]}"
+                      exit 1
+                  fi
+
+                  # Written elsewhere first: `> SHA256SUMS` would create the file
+                  # before `*` is expanded on some shells, and it would then hash
+                  # its own empty self.
+                  sha256sum -- * > "${RUNNER_TEMP}/SHA256SUMS"
+                  mv "${RUNNER_TEMP}/SHA256SUMS" SHA256SUMS
+                  sha256sum -c SHA256SUMS
+
+                  gh release upload "${GITHUB_REF_NAME}" SHA256SUMS \
+                      --repo "${GITHUB_REPOSITORY}" --clobber
+
     # Every asset job must succeed, so a target, OpenWrt package set or Android
     # APK that failed to build leaves the release a draft rather than publishing
     # a half-populated one. Finish the job by hand (or re-run the failed leg) and
     # the draft is still there.
     publish-release:
-        needs: [upload-assets, openwrt-luci, compress-assets, android]
+        needs: [upload-assets, openwrt-luci, compress-assets, android, checksums]
         runs-on: ubuntu-latest
         steps:
             - name: Publish the draft now that every asset is uploaded
