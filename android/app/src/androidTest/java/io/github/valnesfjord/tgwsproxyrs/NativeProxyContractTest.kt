@@ -47,16 +47,29 @@ class NativeProxyContractTest {
     fun nativeEntryPointsResolve() {
         assertFalse("nothing should be running yet", NativeProxy.nativeIsRunning())
 
-        // Documented as a no-op when idle, so it costs nothing to call here.
-        NativeProxy.nativeStop()
-
         // Rejected by clap before anything is started, which exercises
         // nativeStart end to end with no side effect to clean up. The shim
         // returns the message rather than throwing — ProxyService.startProxy
-        // reads it the same way — so a non-null String is the success case.
-        val error = NativeProxy.nativeStart("--definitely-not-a-flag")
-        assertNotNull("nativeStart should reject an unknown flag", error)
+        // reads it the same way — so a String is the success case, and
+        // asserting *which* String is what keeps the check below honest: see
+        // awaitRejection for why the other refusal `start_proxy` can produce
+        // would quietly disarm it.
+        val error = awaitRejection("--definitely-not-a-flag")
+        assertTrue("unexpected rejection: $error", error.contains("--definitely-not-a-flag"))
+
+        // Having reached clap, `start_proxy` was past its guard: it had already
+        // reaped any finished worker, and reaping is also what clears the
+        // `stopping` flag. That is what gives this line something to say — with
+        // the flag set, `nativeIsRunning()` answers false whatever the worker
+        // is doing, so a rejected start that spawned one anyway would read
+        // exactly like a rejected start that did not.
         assertFalse("a rejected start must not leave a worker behind", NativeProxy.nativeIsRunning())
+
+        // Documented as a no-op when idle, so it costs nothing to call — but it
+        // has to come last. It sets `stopping`, which nothing short of the next
+        // accepted start clears, and every `nativeIsRunning()` above would then
+        // be pinned to false and prove nothing.
+        NativeProxy.nativeStop()
     }
 
     /**
@@ -76,9 +89,7 @@ class NativeProxyContractTest {
         // what makes passing an explicit --secret worth the trouble.
         assertTrue("unexpected link: $link", link.endsWith("&secret=dd$TEST_SECRET"))
 
-        val port = requireNotNull(Regex("&port=(\\d+)&").find(link)) { "no port in $link" }
-            .groupValues[1]
-            .toInt()
+        val port = portOf(link)
         assertTrue("port out of range: $port", port in 1..65535)
 
         // The banner is written before the callback fires, so the link on its
@@ -116,33 +127,40 @@ class NativeProxyContractTest {
         val flag = if (verbose) "--verbose" else "--quiet"
         LogCapture().use { capture ->
             startProxy("$OFFLINE_ARGS $flag")
-            // `onNativeListening` does not travel through the tracing writer —
-            // the callback is invoked straight from `on_listen` — so the link
-            // arrives even at `--quiet`. That is what turns the negative phase
-            // below into a bounded wait for a known point in startup instead of
-            // a bare sleep: by the time the link is here, the banner has either
-            // been written or been suppressed.
+            // The link is what keeps the quiet phase from being satisfied by a
+            // proxy that never came up: `onNativeListening` does not travel
+            // through the tracing writer — the callback is invoked straight
+            // from `on_listen` — so it arrives even at `--quiet`, and it
+            // arrives only once there is a listener to describe.
             awaitLink()
-            if (verbose) {
-                assertTrue("expected log lines with $flag", capture.awaitAnyLine())
-            } else {
-                // There is nothing to wait *for* now, so wait out a window
-                // several times longer than the gap between the banner and the
-                // link; anything the buggy build would have emitted is already
-                // buffered and only needs the collector to drain it.
-                Thread.sleep(QUIET_WINDOW_MS)
-                assertEquals(
-                    "expected no log lines with $flag",
-                    emptyList<String>(),
-                    capture.lines,
-                )
-            }
             stopAndWait()
+
+            if (verbose) {
+                assertNotNull("expected log lines with $flag", capture.awaitLine())
+            } else {
+                // There is nothing to wait *for* in this phase, so wait for a
+                // line of this test's own, pushed through the same callback the
+                // shim calls. Two facts make its arrival a complete answer
+                // rather than a sample: the stop above returned only after the
+                // runtime was torn down, so every line the run was ever going
+                // to emit has been emitted, and a SharedFlow hands a collector
+                // its lines in emission order, so all of them are already here
+                // if any are. A barrier beats a sleep on both counts — it
+                // cannot be outrun by a slow emulator, and it does not cost two
+                // seconds when it passes.
+                NativeProxy.onNativeLog(QUIET_BARRIER)
+                assertEquals("expected no log lines with $flag", QUIET_BARRIER, capture.awaitLine())
+            }
         }
         resetBridge()
     }
 
     private companion object {
-        const val QUIET_WINDOW_MS = 2_000L
+        /**
+         * The barrier line. Deliberately unlike anything the proxy logs, and in
+         * particular free of a `tg://proxy?` link, which `ProxyBridge.onLog`
+         * would pick up as a listening address.
+         */
+        const val QUIET_BARRIER = "androidTest quiet-phase barrier"
     }
 }

@@ -10,8 +10,8 @@ import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
@@ -53,20 +53,25 @@ internal const val LISTEN_TIMEOUT_MS = 15_000L
 internal const val SHUTDOWN_TIMEOUT_MS = 20_000L
 
 /**
- * Start the proxy, tolerating the one error that is purely a timing artefact.
+ * `nativeStart`, with the one refusal that is a timing artefact waited out.
  *
- * `stop_proxy` deliberately does not join the worker (joining on the Android
- * main thread is the ANR this suite exists to prevent), so for a moment after a
- * stop the shim still refuses to start with "still stopping". Every other
- * error — a rejected argument, a failed bind — fails the test where it happens
- * instead of being retried into a timeout.
+ * `start_proxy` refuses — before it so much as looks at the arguments — while
+ * it still holds a worker it cannot reap, and `stop_proxy` deliberately does
+ * not join that worker (joining on the Android main thread is the ANR this
+ * suite exists to prevent). The window is now microseconds wide, since the shim
+ * reports a stop only once the runtime has wound down, but it is still the gap
+ * between that report and the worker thread actually returning.
+ *
+ * Every other error is handed back to the caller on the first try, so a
+ * rejected argument or a failed bind fails a test where it happens instead of
+ * being retried into a timeout.
  */
-internal fun startProxy(args: String) {
+private fun startPastWindDown(args: String): String? {
     val deadline = SystemClock.elapsedRealtime() + SHUTDOWN_TIMEOUT_MS
     while (true) {
-        val error = NativeProxy.nativeStart(args) ?: return
+        val error = NativeProxy.nativeStart(args) ?: return null
         if (!error.contains("still stopping")) {
-            throw AssertionError("nativeStart(\"$args\") failed: $error")
+            return error
         }
         if (SystemClock.elapsedRealtime() > deadline) {
             throw AssertionError("previous run never finished winding down: $error")
@@ -75,10 +80,38 @@ internal fun startProxy(args: String) {
     }
 }
 
+/** Start the proxy, failing the test on any error the shim reports. */
+internal fun startProxy(args: String) {
+    val error = startPastWindDown(args) ?: return
+    throw AssertionError("nativeStart(\"$args\") failed: $error")
+}
+
+/**
+ * Ask for a start the caller expects the shim to reject on its *arguments*, and
+ * hand back that rejection.
+ *
+ * Telling the two refusals apart matters to more than the error text. "still
+ * stopping" is produced by the guard at the top of `start_proxy` and leaves the
+ * `stopping` flag set, which pins `nativeIsRunning()` to false; the argument
+ * rejection is reached only once that guard has passed, having reaped any
+ * finished worker and cleared the flag with it. So a caller that mistook the
+ * first for the second would go on to assert with a `nativeIsRunning()` that
+ * can no longer answer anything.
+ */
+internal fun awaitRejection(args: String): String =
+    startPastWindDown(args)
+        ?: throw AssertionError("nativeStart(\"$args\") was accepted; expected a rejection")
+
 /** Wait for the `tg://` link the `on_listen` callback publishes. */
 internal fun awaitLink(): String = runBlocking {
     withTimeout(LISTEN_TIMEOUT_MS) { ProxyBridge.tgLink.filterNotNull().first() }
 }
+
+/** The port `--port 0` settled on, as published in the `tg://` link. */
+internal fun portOf(link: String): Int =
+    requireNotNull(Regex("&port=(\\d+)&").find(link)) { "no port in $link" }
+        .groupValues[1]
+        .toInt()
 
 /**
  * Stop, and wait until the run has actually reported itself finished.
@@ -87,7 +120,13 @@ internal fun awaitLink(): String = runBlocking {
  * what keeps the UI from repainting "Running" over a proxy with no listener —
  * so it cannot be the signal here. `ProxyBridge.running` can: it only goes
  * false once the worker has called `onNativeStopped` (or `onNativeError`),
- * which is after `run_with_listen` has returned and the port is free.
+ * which the shim emits as the last statement of the worker thread, after
+ * `run_with_listen` has returned *and* the runtime has been torn down. So when
+ * this returns, the port is free and nothing of that run is still running to
+ * emit a log line.
+ *
+ * The wait is bounded and throws on timeout, which is what makes it, rather
+ * than any follow-up assertion, the thing that proves a stop took effect.
  */
 internal fun stopAndWait() {
     if (NativeProxy.nativeIsRunning()) {
@@ -117,14 +156,15 @@ internal fun resetBridge() {
  * once the collector is registered and is the only race-free "I am attached"
  * signal; sleeping here instead would be the flakiest line in the suite.
  *
- * Replay-0 also cuts the other way, which is what makes the negative assertion
- * safe: a line a *previous* run emits before this capture subscribes can never
- * be delivered to it.
+ * Replay-0 also cuts the other way, which is half of what makes the negative
+ * assertion safe: a line a *previous* run emits before this capture subscribes
+ * can never be delivered to it. The other half is [stopAndWait], which the
+ * previous phase ends with — the run that emitted those lines is torn down, not
+ * merely asked to stop, before this capture exists.
  */
 internal class LogCapture : AutoCloseable {
     private val scope = CoroutineScope(Dispatchers.Default)
-    private val collected = CopyOnWriteArrayList<String>()
-    private val firstLine = CountDownLatch(1)
+    private val delivered = LinkedBlockingQueue<String>()
     private val job: Job
 
     init {
@@ -132,20 +172,21 @@ internal class LogCapture : AutoCloseable {
         job = scope.launch {
             ProxyBridge.logs
                 .onSubscription { attached.countDown() }
-                .collect { line ->
-                    collected += line
-                    firstLine.countDown()
-                }
+                .collect { line -> delivered.put(line) }
         }
         check(attached.await(5, TimeUnit.SECONDS)) { "log collector never attached" }
     }
 
-    /** Everything delivered so far. */
-    val lines: List<String> get() = collected.toList()
-
-    /** Block until the first line arrives, so "logging works" is a wait, not a sleep. */
-    fun awaitAnyLine(timeoutMs: Long = LISTEN_TIMEOUT_MS): Boolean =
-        firstLine.await(timeoutMs, TimeUnit.MILLISECONDS)
+    /**
+     * Block for the next line this capture has not been handed yet, so "a line
+     * arrived" is a wait rather than a sleep. Null means the timeout expired.
+     *
+     * A `SharedFlow` hands one collector its values in emission order, so a
+     * caller can emit a line of its own and read this returning that line as
+     * proof that nothing emitted earlier is merely still in flight.
+     */
+    fun awaitLine(timeoutMs: Long = LISTEN_TIMEOUT_MS): String? =
+        delivered.poll(timeoutMs, TimeUnit.MILLISECONDS)
 
     override fun close() {
         job.cancel()

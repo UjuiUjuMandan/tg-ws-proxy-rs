@@ -5,11 +5,14 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -47,7 +50,7 @@ class NativeProxyStopLatencyTest {
     @Test
     fun stopReturnsPromptlyOnTheMainThread() {
         startProxy(OFFLINE_ARGS)
-        awaitLink()
+        val port = portOf(awaitLink())
         // Without this the test could pass vacuously against a stop that had
         // nothing to stop.
         assertTrue("the proxy should be running before it is stopped", NativeProxy.nativeIsRunning())
@@ -72,11 +75,27 @@ class NativeProxyStopLatencyTest {
         )
 
         // A non-blocking stop necessarily returns before the worker is gone, so
-        // the shutdown itself gets its own, far more generous budget. Asserting
-        // it here is what stops "returned quickly" from being satisfiable by a
-        // stop that never took effect.
+        // the shutdown itself gets its own, far more generous budget. The wait
+        // inside stopAndWait is what spends it, and what stops "returned
+        // quickly" from being satisfiable by a stop that never took effect: it
+        // returns only on the worker's own report and throws if that report
+        // never comes. A follow-up `nativeIsRunning()` could not do that job —
+        // `nativeStop()` pins it to false until the next accepted start,
+        // whatever the worker is doing.
         stopAndWait()
-        assertFalse("the worker should be gone after a stop", NativeProxy.nativeIsRunning())
+
+        // What the report cannot say for itself is that it was not premature.
+        // It is emitted after the runtime teardown, well after `run_with_listen`
+        // dropped the listener, so by now the port it was bound to has to be
+        // refusing connections.
+        try {
+            Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), CONNECT_TIMEOUT_MS) }
+            fail("port $port still accepts connections after the stop was reported")
+        } catch (expected: IOException) {
+            // Connection refused, on loopback and immediately: nothing is
+            // listening any more, which is the point of the stop.
+            Log.i(TAG, "port $port refused a connection after the stop: $expected")
+        }
     }
 
     private companion object {
@@ -93,5 +112,12 @@ class NativeProxyStopLatencyTest {
          * anything under 5 s still catches the regression.
          */
         const val MAIN_THREAD_BUDGET_MS = 1_500L
+
+        /**
+         * Only ever spent when the assertion is about to fail: a loopback port
+         * with nothing bound to it refuses at once, so this bounds the hang a
+         * *listening* socket would otherwise cause.
+         */
+        const val CONNECT_TIMEOUT_MS = 5_000
     }
 }
