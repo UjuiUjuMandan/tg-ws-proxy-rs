@@ -5,34 +5,45 @@ on:
     branches:
       - main
       - master
-      - feature/**
     tags:
       - v[0-9]+.*
   pull_request:
 
-# Every push to a PR branch fires this workflow twice -- once for `push`,
-# because feature/** is in the list above, and once for `pull_request` -- and
-# the two runs build the same commit. Since the android-emulator matrix added
-# two NDK installs, two Rust cross-compiles and two emulator boots to that
-# bill, put both events in one group so the second cancels the first.
+# `feature/**` is deliberately absent from the push list. Every feature branch
+# here gets a PR as soon as it exists, and `pull_request` already rebuilds on
+# every push to a branch with an open PR, so listing it above only made each
+# push run the whole workflow twice over the same commit -- and since the
+# android-emulator matrix that bill is two NDK installs, two Rust
+# cross-compiles and two emulator boots.
 #
-# Keyed on the branch name and not on `github.ref`: a push sees
-# refs/heads/<branch> while its pull_request sees refs/pull/N/merge, so `ref`
-# would file the duplicate pair under two different groups and change nothing.
-# `head_ref || ref_name` is the branch name for both. It carries the head
-# repository because a fork's branch names are not ours -- a PR from a fork's
-# own `main` must not share a group with a push to this one.
+# Dropping the trigger rather than folding the pair into one concurrency group:
+# a group deduplicates by starting both runs and letting the second cancel the
+# first, and GitHub does not order the `push` and `pull_request synchronize`
+# webhooks. Two pushes in quick succession can interleave so that the survivor
+# is the `push` run, leaving the PR showing a cancelled `CI` check that nothing
+# will re-run -- which blocks the PR outright wherever a job here is a required
+# status check.
+#
+# What this costs: a feature branch with no PR open yet gets no CI at all.
+# Opening the PR runs the full workflow on it, so the gap closes the moment the
+# branch is proposed for merge. release-version is unaffected -- it compares
+# against the base branch only for `pull_request` and validates the tag only
+# for tag pushes, and a push to a branch was already its "skipped" case.
 concurrency:
+  # Only pull_request runs share a group, keyed on the PR, so successive pushes
+  # to a PR branch supersede each other. Every other run -- default branch,
+  # release tag -- gets a group of exactly one, named after its own run id: a
+  # run on a merged or tagged commit is the record for that commit, and the one
+  # place a result is consulted later, so cancelling it halfway would leave a
+  # missing check on it. A group nothing else can ever join is what makes that
+  # unconditional. A cancel-in-progress condition would not be: a same-repo PR
+  # opened from `main` for a back-merge has head_ref `main`, so a branch-keyed
+  # group would put it alongside a push to `main` and cancel it.
   group: >-
-    ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name
-    || github.repository }}-${{ github.head_ref || github.ref_name }}
-  # Only where the ref is someone's work in progress. A run on the default
-  # branch or on a release tag is the record for that commit: cancelling it
-  # halfway leaves a missing check on something already merged or tagged, which
-  # is the one place the result is actually consulted later.
-  cancel-in-progress: >-
-    ${{ github.event_name == 'pull_request'
-    || startsWith(github.ref, 'refs/heads/feature/') }}
+    ${{ github.workflow }}-${{ github.event_name == 'pull_request'
+    && format('pr-{0}', github.event.pull_request.number)
+    || format('run-{0}', github.run_id) }}
+  cancel-in-progress: true
 
 # The floor for every job below; raise it on a single job if one ever needs
 # more. Nothing here touches the API: `contents` covers checkout and the
@@ -497,6 +508,19 @@ jobs:
       # emulator never loaded the artifact those assertions were about, and
       # nothing would say so. Identify the installed APK by hash, so this
       # names a file rather than trusting one.
+      #
+      # One hash can match both names, and that is not a failure. This job pins
+      # TG_ANDROID_ABIS to the single ABI the emulator can run, and the
+      # convention plugin hands that one-element list to both
+      # defaultConfig.ndk.abiFilters and splits.abi.include() while keeping the
+      # universal APK and one shared versionCode. The two outputs are then
+      # packaged from an identical input set -- same dex, same resources, the
+      # same lone lib/x86_64/libtg_ws_proxy_jni.so, same manifest -- and come
+      # out byte-identical. Two names for one file means the device ran these
+      # bytes whichever name AGP reached for, and there is no packaging
+      # difference left for this step to catch, so say so and pass. It still
+      # bites for any ABI set with more than one entry, which is where the
+      # universal APK genuinely carries libraries the split does not.
       - name: Check which APK the tests ran against
         working-directory: android
         shell: bash
@@ -509,15 +533,25 @@ jobs:
             [[ "$(sha256sum "$out/$candidate" | cut -d' ' -f1)" == "$want" ]] &&
               matched+=("$candidate")
           done < <(jq -r '.elements[].outputFile' "$out/output-metadata.json")
-          installed="${matched[*]:-an APK this build did not produce}"
-          echo "connectedDebugAndroidTest ran against: $installed"
-          # Short-circuit order matters: with no match at all there is no
-          # matched[0] to compare, and `set -u` would abort on it.
-          if [[ "${#matched[@]}" -ne 1 || "${matched[0]}" != app-x86_64-debug.apk ]]; then
-            echo "::error::the tests installed $installed, expected" \
+          if [[ "${#matched[@]}" -eq 0 ]]; then
+            echo "::error::the tests installed an APK this build did not" \
+              "produce (sha256 $want), expected app-x86_64-debug.apk"
+            exit 1
+          fi
+          echo "connectedDebugAndroidTest ran against: ${matched[*]}"
+          split=""
+          for candidate in "${matched[@]}"; do
+            [[ "$candidate" == app-x86_64-debug.apk ]] && split="$candidate"
+          done
+          if [[ -z "$split" ]]; then
+            echo "::error::the tests installed ${matched[*]}, expected" \
               "app-x86_64-debug.apk — the per-ABI split is the packaging this" \
               "job exists to load on a device"
             exit 1
+          fi
+          if [[ "${#matched[@]}" -gt 1 ]]; then
+            echo "(these outputs are byte-identical, so the device loaded the" \
+              "per-ABI packaging under whichever name AGP installed)"
           fi
 
       # The Gradle failure message names the test but not why it failed; the
