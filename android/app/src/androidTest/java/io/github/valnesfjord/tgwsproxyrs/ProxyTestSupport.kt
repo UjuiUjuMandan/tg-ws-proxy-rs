@@ -104,7 +104,22 @@ internal fun awaitRejection(args: String): String =
 
 /** Wait for the `tg://` link the `on_listen` callback publishes. */
 internal fun awaitLink(): String = runBlocking {
-    withTimeout(LISTEN_TIMEOUT_MS) { ProxyBridge.tgLink.filterNotNull().first() }
+    withTimeout(LISTEN_TIMEOUT_MS) {
+        // `running` before the link, because [ProxyBridge.tgLink] has two
+        // writers and only one of them means "this run is established".
+        // `onListening` sets the link and `running` together, but
+        // `ProxyBridge.onLog` also scrapes the `tg://` line out of the startup
+        // banner, and that arrives first and sets the link alone.
+        //
+        // Returning on the scraped link leaves `running` false, and then
+        // [stopAndWait]'s wait for it to go false is satisfied instantly by a
+        // run that has not even reported itself yet -- so a caller that stops
+        // and then asserts the port is closed races the listener it is asking
+        // about. That is exactly how stopReturnsPromptlyOnTheMainThread failed
+        // on the API 26 leg while passing on the faster API 36 one.
+        ProxyBridge.running.first { it }
+        ProxyBridge.tgLink.filterNotNull().first()
+    }
 }
 
 /** The port `--port 0` settled on, as published in the `tg://` link. */
