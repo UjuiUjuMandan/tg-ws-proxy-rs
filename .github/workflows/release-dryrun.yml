@@ -135,10 +135,15 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
-                  # PyYAML ships with the runner image; the fallback is there so
-                  # an image that drops it costs a few seconds rather than the
-                  # whole rehearsal.
-                  python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+                  # PyYAML ships preinstalled on the GitHub-hosted runner
+                  # images, which is the only place this workflow runs. There
+                  # is deliberately no pip fallback: those images are PEP 668
+                  # environments, so `pip install` refuses with
+                  # `externally-managed-environment` and would fail the step
+                  # anyway -- only with an error about pip rather than about
+                  # the missing module. If an image ever drops PyYAML, the
+                  # heredoc below says `ModuleNotFoundError: yaml` and the fix
+                  # is to install it here explicitly.
                   mkdir -p "${RUNNER_TEMP}/steps"
                   python3 - <<'PY'
                   import os, pathlib, yaml
