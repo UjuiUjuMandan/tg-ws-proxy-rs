@@ -10,6 +10,30 @@ on:
       - v[0-9]+.*
   pull_request:
 
+# Every push to a PR branch fires this workflow twice -- once for `push`,
+# because feature/** is in the list above, and once for `pull_request` -- and
+# the two runs build the same commit. Since the android-emulator matrix added
+# two NDK installs, two Rust cross-compiles and two emulator boots to that
+# bill, put both events in one group so the second cancels the first.
+#
+# Keyed on the branch name and not on `github.ref`: a push sees
+# refs/heads/<branch> while its pull_request sees refs/pull/N/merge, so `ref`
+# would file the duplicate pair under two different groups and change nothing.
+# `head_ref || ref_name` is the branch name for both. It carries the head
+# repository because a fork's branch names are not ours -- a PR from a fork's
+# own `main` must not share a group with a push to this one.
+concurrency:
+  group: >-
+    ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name
+    || github.repository }}-${{ github.head_ref || github.ref_name }}
+  # Only where the ref is someone's work in progress. A run on the default
+  # branch or on a release tag is the record for that commit: cancelling it
+  # halfway leaves a missing check on something already merged or tagged, which
+  # is the one place the result is actually consulted later.
+  cancel-in-progress: >-
+    ${{ github.event_name == 'pull_request'
+    || startsWith(github.ref, 'refs/heads/feature/') }}
+
 jobs:
   release-version:
     runs-on: ubuntu-latest
