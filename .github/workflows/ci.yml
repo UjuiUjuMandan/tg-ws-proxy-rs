@@ -272,14 +272,24 @@ jobs:
             # .symtab is gone — and .dynsym is what the dynamic linker resolves
             # against anyway, which makes it the table that decides whether the
             # app works.
-            mapfile -t exported < <(readelf -W --dyn-syms "$so" |
-              awk '$4 == "FUNC" && $5 == "GLOBAL" && $7 != "UND" { print $8 }')
+            #
+            # Collected into a file rather than fed to each `grep -q` down a
+            # pipe, for the same reason as the dex extraction below: `grep -q`
+            # exits at the first match, and the SIGPIPE that kills the writer
+            # still mid-list fails the pipeline under `set -o pipefail`. That
+            # inverts to "symbol missing" for a symbol that is right there —
+            # a red release build over a library that is perfectly fine. An
+            # empty file still fails every grep below, so nothing here can
+            # pass by finding nothing.
+            readelf -W --dyn-syms "$so" |
+              awk '$4 == "FUNC" && $5 == "GLOBAL" && $7 != "UND" { print $8 }' \
+              > "$work/exported"
             for entry in nativeStart nativeStop nativeIsRunning; do
               want="Java_${mangled}_NativeProxy_${entry}"
-              if ! printf '%s\n' "${exported[@]}" | grep -Fxq -- "$want"; then
+              if ! grep -Fxq -- "$want" "$work/exported"; then
                 echo "::error::${so#"$work"/} does not export $want;" \
                   "crates/android-jni/src/android.rs must follow $namespace"
-                printf '%s\n' "${exported[@]}" | grep -F -- 'Java_' ||
+                grep -F -- 'Java_' "$work/exported" ||
                   echo "  (the library exports no Java_ symbol at all)"
                 exit 1
               fi
@@ -289,7 +299,10 @@ jobs:
             # crates/android-jni/src/android.rs), which the symbol names above
             # cannot cover: a stale literal there passes every check so far and
             # then fails on the device, at load, with a ClassNotFoundException.
-            if ! grep -qa -- "$(tr . / <<<"$namespace")/NativeProxy" "$so"; then
+            # -F like every other grep here: the needle is a package path, and
+            # only the namespace validation above keeps its dots from being
+            # regex wildcards. That check is not this check's job to rely on.
+            if ! grep -qaF -- "$(tr . / <<<"$namespace")/NativeProxy" "$so"; then
               echo "::error::${so#"$work"/} has no NATIVE_CLASS_NAME matching $namespace"
               exit 1
             fi
