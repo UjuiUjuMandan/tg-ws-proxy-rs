@@ -554,6 +554,11 @@ jobs:
       # The Gradle failure message names the test but not why it failed; the
       # HTML report carries the assertion text and the logcat excerpt, which is
       # the difference between "flaky" and "diagnosable".
+      #
+      # The device logs are separate because the report has nothing to say when
+      # the instrumentation process dies natively -- and a JNI shim is exactly
+      # the kind of code that dies that way. run-connected-tests.sh collects
+      # them while the emulator is still alive.
       - name: Upload the connected test report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
@@ -561,6 +566,14 @@ jobs:
           name: android-test-report-api${{ matrix.api-level }}
           if-no-files-found: warn
           path: android/app/build/reports/androidTests/connected/**
+
+      - name: Upload the device logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-device-logs-api${{ matrix.api-level }}
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/device-logs/**
 
   openwrt:
     runs-on: ubuntu-latest
