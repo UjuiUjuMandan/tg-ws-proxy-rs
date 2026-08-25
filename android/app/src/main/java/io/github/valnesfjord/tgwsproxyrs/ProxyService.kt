@@ -99,7 +99,8 @@ class ProxyService : Service() {
             stopSelf()
         } else if (ProxyBridge.error.value != null) {
             // NativeStart is async: the worker may have already failed and
-            // reported the error before we optimistically flipped to running.
+            // reported the error while we were inside it, and the optimistic
+            // flip below would paint "Running" over that error.
             proxyStarted = false
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -135,8 +136,9 @@ class ProxyService : Service() {
         // answering for it would put a Start button in front of the user
         // before a start could be accepted: tap Stop, tap Start, and the
         // shim's internal "proxy is still stopping" lands in the error line.
-        // [stopNative] leaves the running state only when it knows no report
-        // is coming.
+        // Leaving the running state is [stopNative]'s call instead: it waits
+        // for the worker's report and answers for it only when none is coming
+        // or none arrives.
         stopNative()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -217,11 +219,14 @@ class ProxyService : Service() {
                     NativeProxy.nativeStop()
                     awaitStopReport()
                 } else {
-                    // Either nothing ever ran or a stop is already in flight on
-                    // an earlier task — and that task does not return until the
-                    // report has landed, so reaching this branch means no
-                    // report is coming and this is the only chance to leave the
-                    // running state.
+                    // Nothing for the shim to stop.  Either nothing ever ran,
+                    // and this write is the only one there will be, or an
+                    // earlier stop task has already returned — in which case
+                    // the running state was left back then, by the worker's
+                    // report or by that task giving up on one.  What this
+                    // cannot be is a stop still awaiting its report: the
+                    // executor is single-threaded, so that task would not have
+                    // let this one start.
                     ProxyBridge.setRunning(false)
                 }
             }
