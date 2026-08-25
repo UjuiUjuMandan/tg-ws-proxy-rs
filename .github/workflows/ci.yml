@@ -34,6 +34,14 @@ concurrency:
     ${{ github.event_name == 'pull_request'
     || startsWith(github.ref, 'refs/heads/feature/') }}
 
+# The floor for every job below; raise it on a single job if one ever needs
+# more. Nothing here touches the API: `contents` covers checkout and the
+# base-branch fetch in release-version, and that is the whole list. This is
+# also the workflow that runs third-party actions and shells out to rustup and
+# cargo, so it is the one where the ambient token should be smallest.
+permissions:
+  contents: read
+
 jobs:
   release-version:
     runs-on: ubuntu-latest
