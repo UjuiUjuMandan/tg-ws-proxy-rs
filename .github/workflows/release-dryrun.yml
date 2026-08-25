@@ -382,6 +382,7 @@ jobs:
             # by glob rather than by name. `android-release` above records that
             # call; this is the half that has to reach GitHub.
             - name: Upload an APK set the way the android job does
+              shell: bash
               run: |
                   set -euxo pipefail
                   stage="$(mktemp -d)"
@@ -399,6 +400,7 @@ jobs:
             # different gh path from the filtered download above, and one that
             # likewise has to work against a draft.
             - name: Download every asset the way `checksums` does
+              shell: bash
               run: |
                   set -euxo pipefail
                   gh release download "$DRY_TAG" --repo "${GITHUB_REPOSITORY}" \

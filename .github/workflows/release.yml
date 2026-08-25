@@ -215,6 +215,7 @@ jobs:
             # `android` and `android-emulator` jobs in .github/workflows/ci.yml,
             # and docs/Android.md.
             - name: Install pinned Android NDK
+              shell: bash
               run: |
                   set -euo pipefail
                   ndk="ndk;28.1.13356709"
@@ -242,6 +243,7 @@ jobs:
             # Release only: the per-ABI plus universal APK set, R8-minified.
             - name: Build the release APKs
               working-directory: android
+              shell: bash
               run: ./gradlew :app:assembleRelease
 
             - name: Stage and upload the APKs
