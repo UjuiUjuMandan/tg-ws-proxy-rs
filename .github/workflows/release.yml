@@ -406,11 +406,19 @@ jobs:
     # tool, and packing a Mach-O invalidates its signature so arm64 macOS
     # refuses to run it at all.
     compress-assets:
-        needs: upload-assets
+        # `create-release` is already an ancestor through `upload-assets`; it is
+        # named here so the guard below can read its result.
+        needs: [create-release, upload-assets]
         # Not `success()`: upload-assets covers Windows and macOS too, and a
         # hiccup there should not silently drop every `-upx` asset. Each leg
         # below fails on its own if its plain asset never made it to the release.
-        if: ${{ !cancelled() }}
+        #
+        # A failed `create-release` is the one case worth skipping for. A
+        # skipped dependency is not a cancellation, so `!cancelled()` alone
+        # would start all five legs against a release that was never created
+        # and each would die on a raw `gh release download` error -- five red
+        # jobs whose logs point at `gh` rather than at the job that broke.
+        if: ${{ !cancelled() && needs.create-release.result == 'success' }}
         runs-on: ubuntu-latest
         strategy:
             fail-fast: false
@@ -469,7 +477,8 @@ jobs:
                       --repo "${GITHUB_REPOSITORY}" --clobber
 
     # The release publishes exactly one checksum file, so it can only be built
-    # once the last asset has landed -- every job that uploads one is in `needs`.
+    # once the last asset has landed -- every job that uploads one is in `needs`,
+    # plus `create-release` so the guard below can read its result.
     #
     # This used to live inside `openwrt-luci`, which hashed the files in its own
     # staging directory plus the musl tarballs it pulled down for that purpose.
@@ -483,12 +492,16 @@ jobs:
     # still-draft release back. It needs no working tree, and it means the
     # hashes cover the bytes a user actually downloads.
     checksums:
-        needs: [upload-assets, compress-assets, openwrt-luci, android]
+        needs: [create-release, upload-assets, compress-assets, openwrt-luci, android]
         # Not `success()`: a failure in one packaging path should surface as a
         # failing checksum job over a short asset set, not as a release whose
         # other assets quietly lost their hashes. `publish-release` waits on
         # this too, so either way the release stays a draft.
-        if: ${{ !cancelled() }}
+        #
+        # `create-release` is excluded from that: with no draft there is nothing
+        # to read back and nothing to hash, so running would only add a raw `gh`
+        # error pointing away from the job that actually failed.
+        if: ${{ !cancelled() && needs.create-release.result == 'success' }}
         runs-on: ubuntu-latest
         steps:
             - name: Hash every asset on the release
