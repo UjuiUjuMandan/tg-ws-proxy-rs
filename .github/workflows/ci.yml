@@ -143,6 +143,7 @@ jobs:
       # Pin it so the .so and CI are reproducible; sdkmanager is a no-op when
       # the version is already installed. Keep in sync with docs/Android.md.
       - name: Install pinned Android NDK
+        shell: bash
         run: |
           set -euo pipefail
           ndk="ndk;28.1.13356709"
@@ -387,6 +388,7 @@ jobs:
       # Same pin, and the same reasoning, as the `android` job above. Keep the
       # two in sync with each other and with docs/Android.md.
       - name: Install pinned Android NDK
+        shell: bash
         run: |
           set -euo pipefail
           ndk="ndk;28.1.13356709"
@@ -416,7 +418,9 @@ jobs:
       # virtualisation: minutes to boot instead of seconds, and markedly
       # flakier once it is up.
       - name: Enable KVM
+        shell: bash
         run: |
+          set -euo pipefail
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
