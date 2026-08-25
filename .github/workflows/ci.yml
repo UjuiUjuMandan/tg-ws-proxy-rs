@@ -175,6 +175,7 @@ jobs:
       # keep rules get checked. The .so is release-built for both.
       - name: Build debug and release APKs
         working-directory: android
+        shell: bash
         run: ./gradlew :app:assembleDebug :app:assembleRelease
 
       # Both ways the ABI splits can misfire are silent: a splits block that
@@ -422,6 +423,7 @@ jobs:
       # the job's wall clock beside it.
       - name: Build the app and test APKs
         working-directory: android
+        shell: bash
         run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
 
       # The hosted runners have /dev/kvm but do not expose it to the runner
@@ -477,15 +479,12 @@ jobs:
           app_id="$(jq -er '.applicationId' "$out/output-metadata.json")"
           echo "APP_ID=$app_id" >> "$GITHUB_ENV"
 
-      # The two `script` lines, which the runner executes separately:
-      #
-      # 1. leaveApksInstalledAfterRun, because AGP uninstalls both APKs the
-      #    moment the suite ends and the next step needs to see what the device
-      #    was actually given.
-      # 2. Pull that APK back off the device. This is deliberately the bytes
-      #    and not a line out of Gradle's log: the log says which file AGP
-      #    meant to send, the device says which one it got, and the whole point
-      #    of the next step is that those can differ.
+      # The suite and the APK pull live in a script file, not in `script:`
+      # below. The runner wraps each line it is given in `sh -c "<line>"`, so a
+      # line with double quotes of its own -- which `adb pull "$(adb shell pm
+      # path ...)"` cannot avoid -- is cut short at the first inner quote. The
+      # file also puts `set -euo pipefail` around both commands rather than
+      # leaving a failed suite's visibility to the action's execution model.
       - name: Run instrumentation tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -496,9 +495,7 @@ jobs:
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           working-directory: android
-          script: |
-            ./gradlew :app:connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
-            adb pull "$(adb shell pm path "$APP_ID" | tr -d '\r' | sed -n 's/^package://p')" "$RUNNER_TEMP/installed.apk"
+          script: bash ../.github/scripts/run-connected-tests.sh
 
       # The splits leave the debug variant with two installable outputs --
       # app-x86_64-debug.apk and app-universal-debug.apk -- and AGP, not this
@@ -541,7 +538,7 @@ jobs:
           echo "connectedDebugAndroidTest ran against: ${matched[*]}"
           split=""
           for candidate in "${matched[@]}"; do
-            [[ "$candidate" == app-x86_64-debug.apk ]] && split="$candidate"
+            [[ "$candidate" == "app-x86_64-debug.apk" ]] && split="$candidate"
           done
           if [[ -z "$split" ]]; then
             echo "::error::the tests installed ${matched[*]}, expected" \

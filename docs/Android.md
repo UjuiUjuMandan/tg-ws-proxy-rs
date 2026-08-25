@@ -136,7 +136,8 @@ follows the same list, so `TG_ANDROID_ABIS=arm64-v8a` yields exactly
 ## CI
 
 The `android` job in `.github/workflows/ci.yml` builds both the debug and
-release APKs on every push and pull request, uploads them as build artifacts,
+release APKs on every pull request, and on pushes to `main` and to release
+tags, uploads them as build artifacts,
 and runs the Gradle wrapper JAR checksum validation via
 `gradle/actions/setup-gradle`. It pins the NDK (`28.1.13356709`) because the
 hosted runner images swap their single installed NDK without notice; update
