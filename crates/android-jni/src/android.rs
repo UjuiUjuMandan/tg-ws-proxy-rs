@@ -5,6 +5,7 @@
 //! the `tg://` link back into Kotlin.  Start/stop is cooperative — completing
 //! the watch channel breaks the accept loop the same way a Ctrl+C would.
 
+use std::cell::Cell;
 use std::io::{self, Write};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -322,7 +323,12 @@ fn install_logging(config: &Config) {
     let log_level = if config.quiet {
         "off"
     } else if config.verbose {
-        "debug"
+        // `jni` narrates every thread attach and detach at debug level. That is
+        // this file's own plumbing rather than anything the proxy did, and it
+        // arrives through tracing-log's bridge from inside the very forwarding
+        // path that produced it, so it is noise in the Log panel and a loop
+        // waiting for the guard on [`IN_JNI_CALL`] to slip.
+        "debug,jni=off"
     } else {
         "info"
     };
@@ -487,6 +493,9 @@ fn call_static_void(method: &str) {
 /// (tokio spawns its multi-thread workers onto the blocking pool, so both kinds
 /// run this callback).
 fn attach_runtime_thread() {
+    let Some(_reentry) = JniReentryGuard::acquire() else {
+        return;
+    };
     if let Some(vm) = JVM.get() {
         let _ = vm.attach_current_thread(|_env| jni::errors::Result::Ok(()));
     }
@@ -498,8 +507,65 @@ fn attach_runtime_thread() {
 /// no `Env` or `AttachGuard` is left on the stack, which is the one case
 /// `detach_current_thread` refuses.
 fn detach_runtime_thread() {
+    // Held across the detach itself, not just around a callback: jni logs the
+    // detach, and forwarding that line would re-attach this thread on its way
+    // out. That is the abort described on [`IN_JNI_CALL`].
+    let Some(_reentry) = JniReentryGuard::acquire() else {
+        return;
+    };
     if let Some(vm) = JVM.get() {
         let _ = vm.detach_current_thread();
+    }
+}
+
+thread_local! {
+    /// True while this thread is inside a JNI call this file made.
+    ///
+    /// `jni` reports every attach and detach through the `log` crate, and
+    /// `SubscriberInitExt::init` installs tracing-log's bridge, so those
+    /// records reach [`AndroidMakeWriter`] like any other line.  Forwarding one
+    /// enters [`call_static_impl`], which attaches the thread, which logs.  On
+    /// the detach path it is worse than a loop: the forwarded line re-attaches
+    /// the very thread jni is in the middle of detaching, and the process took
+    /// SIGABRT on a tokio worker the first time anything ran with `--verbose`.
+    ///
+    /// Every line still reaches logcat, which is a plain FFI write and cannot
+    /// re-enter.  What this suppresses is only the nested trip into Kotlin.
+    static IN_JNI_CALL: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Holds [`IN_JNI_CALL`] for as long as it lives, so an early return or an
+/// unwind cannot leave the flag stuck — which would silence the app's Log
+/// panel for the rest of the process while logcat kept filling.
+struct JniReentryGuard;
+
+impl JniReentryGuard {
+    /// `None` when this thread is already inside a JNI call, i.e. when the
+    /// caller is a log line produced by one.
+    fn acquire() -> Option<Self> {
+        // `try_with`, not `with`: a line can still be forwarded while the
+        // thread is being torn down (`AndroidWriter` flushes from its `Drop`),
+        // and by then the thread-local may already be gone. `with` panics
+        // there, and a panic across the JNI boundary aborts the process --
+        // which is the failure this whole guard exists to prevent. A destroyed
+        // flag reads as "already inside a call", so the line goes to logcat
+        // and no further.
+        IN_JNI_CALL
+            .try_with(|in_call| {
+                if in_call.get() {
+                    None
+                } else {
+                    in_call.set(true);
+                    Some(Self)
+                }
+            })
+            .unwrap_or(None)
+    }
+}
+
+impl Drop for JniReentryGuard {
+    fn drop(&mut self) {
+        let _ = IN_JNI_CALL.try_with(|in_call| in_call.set(false));
     }
 }
 
@@ -512,6 +578,10 @@ fn call_static_impl(
         &Global<JClass<'static>>,
     ) -> jni::errors::Result<JValueOwned<'l>>,
 ) {
+    // Dropped at the end of the call; see [`IN_JNI_CALL`].
+    let Some(_reentry) = JniReentryGuard::acquire() else {
+        return;
+    };
     let Some(vm) = JVM.get() else {
         return;
     };
