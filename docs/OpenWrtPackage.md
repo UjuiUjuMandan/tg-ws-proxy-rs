@@ -248,15 +248,17 @@ Use the matching official SDK; no application binary is compiled or packaged:
 ```bash
 openwrt/build-luci-package.sh \
   --sdk /path/to/openwrt-sdk-25.12.5 \
-  --version 2.2.4 --format apk
+  --format apk
 
 openwrt/build-luci-package.sh \
   --sdk /path/to/openwrt-sdk-24.10.5 \
-  --version 2.2.4 --format ipk
+  --format ipk
 ```
 
 The script copies the single recipe into the SDK, invokes the normal OpenWrt
 package target and validates package name, version and architecture metadata.
+The stable package version is read from `Cargo.toml`; `--version` remains
+available for release CI to supply APK/IPK-compatible beta versions.
 Repository checks are:
 
 ```bash

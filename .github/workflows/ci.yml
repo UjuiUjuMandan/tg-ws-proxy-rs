@@ -101,7 +101,7 @@ jobs:
         run: |
           shellcheck -s sh install.sh openwrt/luci-app/root/etc/init.d/tg-ws-proxy-rs \
             openwrt/luci-app/root/etc/uci-defaults/95_luci-tg-ws-proxy-rs
-          shellcheck -s bash openwrt/build-luci-package.sh openwrt/tests/*.sh
+          shellcheck -s bash .github/scripts/*.sh openwrt/build-luci-package.sh openwrt/tests/*.sh
 
       - name: Check LuCI JavaScript and JSON
         run: |

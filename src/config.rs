@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::net::UdpSocket;
+use std::sync::OnceLock;
 
 use clap::Parser;
 
@@ -75,6 +76,18 @@ pub struct MtProtoProxy {
     /// `ee` = FakeTLS.  The prefix byte is stripped before key derivation —
     /// only the trailing 16 bytes are used as the actual cryptographic key.
     pub secret: String,
+    secret_key: Vec<u8>,
+    faketls_hostname: Option<String>,
+}
+
+impl MtProtoProxy {
+    pub fn secret_key(&self) -> &[u8] {
+        &self.secret_key
+    }
+
+    pub fn faketls_hostname(&self) -> Option<&str> {
+        self.faketls_hostname.as_deref()
+    }
 }
 
 /// Parse a `HOST:PORT:SECRET` triplet.
@@ -94,9 +107,22 @@ fn parse_mtproto_proxy(s: &str) -> Result<MtProtoProxy, String> {
         .map_err(|_| format!("invalid port {:?}", parts[1]))?;
     let host = parts[2].to_string();
 
-    hex::decode(&secret).map_err(|_| format!("invalid hex secret {:?}", secret))?;
+    let raw_secret =
+        hex::decode(&secret).map_err(|_| format!("invalid hex secret {:?}", secret))?;
+    let secret_key = crypto::secret_key(&raw_secret).to_vec();
+    let faketls_hostname = crypto::faketls_hostname(&raw_secret)
+        .map(std::str::from_utf8)
+        .transpose()
+        .map_err(|_| "FakeTLS secret hostname must be valid UTF-8".to_string())?
+        .map(ToOwned::to_owned);
 
-    Ok(MtProtoProxy { host, port, secret })
+    Ok(MtProtoProxy {
+        host,
+        port,
+        secret,
+        secret_key,
+        faketls_hostname,
+    })
 }
 
 // ─── CLI / env-var configuration ─────────────────────────────────────────────
@@ -495,6 +521,12 @@ pub struct Config {
     /// Standard `NO_PROXY` / `no_proxy` variables are honored when omitted.
     #[arg(long = "no-proxy", value_name = "LIST", env = "TG_NO_PROXY")]
     pub no_proxy: Option<String>,
+
+    #[arg(skip)]
+    normalized_secrets: OnceLock<Vec<Vec<u8>>>,
+
+    #[arg(skip)]
+    normalized_listen_faketls_domain: OnceLock<Option<String>>,
 }
 
 impl Config {
@@ -523,6 +555,14 @@ impl Config {
             let bytes: [u8; 16] = rand::random();
             self.secrets.push(hex::encode(bytes));
         }
+        let normalized_secrets: Vec<Vec<u8>> = self
+            .secrets
+            .iter()
+            .map(|secret| decode_secret_key(secret))
+            .collect();
+        let normalized_listen_faketls_domain = self.derive_listen_faketls_domain();
+        self.normalized_secrets = OnceLock::from(normalized_secrets);
+        self.normalized_listen_faketls_domain = OnceLock::from(normalized_listen_faketls_domain);
 
         // If no --dc-ip was given, use the built-in defaults — unless a CF
         // domain is configured or --default-domains was requested (in which
@@ -545,28 +585,41 @@ impl Config {
 
     /// The proxy secret as raw bytes (decoded from hex).
     pub fn secret_bytes(&self) -> Vec<u8> {
-        decode_secret_key(self.primary_secret())
+        self.normalized_secrets()
+            .first()
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// All configured proxy secrets as raw bytes.
     pub fn secret_bytes_list(&self) -> Vec<Vec<u8>> {
-        self.secrets
-            .iter()
-            .map(|secret| decode_secret_key(secret))
-            .collect()
+        self.normalized_secrets().to_vec()
+    }
+
+    /// All configured proxy secrets in the process-lifetime representation.
+    pub fn normalized_secrets(&self) -> &[Vec<u8>] {
+        self.normalized_secrets
+            .get_or_init(|| {
+                self.secrets
+                    .iter()
+                    .map(|secret| decode_secret_key(secret))
+                    .collect()
+            })
+            .as_slice()
     }
 
     /// Inbound FakeTLS domain, either from `--listen-faketls-domain` or from
     /// an `ee<key><domainhex>` secret.
     pub fn listen_faketls_domain(&self) -> Option<String> {
-        if let Some(domain) = &self.listen_faketls_domain {
-            return Some(domain.clone());
-        }
+        self.normalized_listen_faketls_domain()
+            .map(ToOwned::to_owned)
+    }
 
-        let raw = hex::decode(self.primary_secret()).ok()?;
-        let hostname = crypto::faketls_hostname(&raw)?;
-
-        std::str::from_utf8(hostname).ok().map(ToOwned::to_owned)
+    /// Borrow the normalized inbound FakeTLS domain without allocating.
+    pub fn normalized_listen_faketls_domain(&self) -> Option<&str> {
+        self.normalized_listen_faketls_domain
+            .get_or_init(|| self.derive_listen_faketls_domain())
+            .as_deref()
     }
 
     /// Full secret value for the generated Telegram link.
@@ -586,6 +639,16 @@ impl Config {
         } else {
             format!("dd{}", secret)
         }
+    }
+
+    fn derive_listen_faketls_domain(&self) -> Option<String> {
+        if let Some(domain) = &self.listen_faketls_domain {
+            return Some(domain.clone());
+        }
+
+        let raw = hex::decode(self.primary_secret()).ok()?;
+        let hostname = crypto::faketls_hostname(&raw)?;
+        std::str::from_utf8(hostname).ok().map(ToOwned::to_owned)
     }
 
     /// Map of DC ID → target IP from `--dc-ip` flags.

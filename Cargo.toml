@@ -1,6 +1,6 @@
 [package]
 name = "tg-ws-proxy-rs"
-version = "2.2.4"
+version = "2.2.5"
 edition = "2024"
 description = "Telegram MTProto WebSocket Bridge Proxy — Rust port of Flowseal/tg-ws-proxy"
 license = "MIT"
@@ -63,7 +63,6 @@ clap = { version = "4", features = ["derive", "env"] }
 # Proxy URL parsing and proxy protocol clients
 url = "2"
 percent-encoding = "2"
-proxyvars = "0.2"
 ipnet = "2"
 httparse = "1"
 async-http-proxy = { version = "1.2", features = [

@@ -25,6 +25,29 @@ permissions:
     contents: read
 
 jobs:
+    release-notes:
+        name: rehearse stable and beta release notes
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v6
+            - name: Prepare stable and beta notes from one source
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+                  work="$(mktemp -d)"
+                  .github/scripts/prepare-release-notes.sh "v${version}" "$work/stable.md"
+                  .github/scripts/prepare-release-notes.sh "v${version}-beta.1" "$work/beta.md"
+                  head -n 1 "$work/stable.md" | grep -Fx "# v${version}"
+                  head -n 1 "$work/beta.md" | grep -Fx "# v${version}-beta.1"
+                  tail -n +2 "$work/stable.md" > "$work/stable-body.md"
+                  tail -n +2 "$work/beta.md" > "$work/beta-body.md"
+                  cmp "$work/stable-body.md" "$work/beta-body.md"
+                  if .github/scripts/prepare-release-notes.sh "v${version}-beta.0" "$work/invalid.md"; then
+                      echo '::error::beta.0 tag was accepted'
+                      exit 1
+                  fi
+
     pack:
         name: pack ${{ matrix.target }}
         runs-on: ubuntu-latest
