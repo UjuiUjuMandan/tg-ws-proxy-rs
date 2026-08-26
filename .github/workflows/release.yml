@@ -13,20 +13,26 @@ jobs:
     # published release with no binaries under it is worse than no release yet.
     # `publish-release` flips it once every asset has landed.
     #
-    # The body comes from the notes committed alongside the version bump, so a
-    # release cannot ship with the previous version's text or none at all --
-    # `allow-missing-changelog` stays false, which fails the release instead.
-    # The heading in that file must be a bare `# vX.Y.Z`: parse-changelog does
-    # not recognise a version heading carrying the crate name, with or without
-    # `prefix-format`. The name lives in `title` instead.
+    # The body comes from the base-version notes committed alongside the version
+    # bump, so a release cannot ship with the previous version's text or none at
+    # all. Beta tags reuse that file with a temporary tag-specific heading. The
+    # bare heading is required because parse-changelog does not recognise one
+    # carrying the crate name; the name lives in `title` instead.
     create-release:
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v6
+            - name: Prepare tag-specific release notes
+              id: release-notes
+              shell: bash
+              run: |
+                  output="${RUNNER_TEMP}/release-notes.md"
+                  .github/scripts/prepare-release-notes.sh "${GITHUB_REF_NAME}" "$output"
+                  echo "path=$output" >> "$GITHUB_OUTPUT"
             - uses: taiki-e/create-gh-release-action@v1
               with:
                   token: ${{ secrets.GITHUB_TOKEN }}
-                  changelog: docs/release-notes/$version.md
+                  changelog: ${{ steps.release-notes.outputs.path }}
                   title: tg-ws-proxy-rs $tag
                   draft: true
 

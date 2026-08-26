@@ -36,10 +36,20 @@ stray="$(find "$ROOT/openwrt/luci-app" -name '*tg-ws-proxy*' ! -name '*tg-ws-pro
 [[ -z "$stray" ]] || fail "packaged path collides with the upstream tg-ws-proxy package: $stray"
 
 cargo_version="$(python3 -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["version"])' "$ROOT/Cargo.toml")"
-grep -Fq ",$cargo_version)" "$makefile" || fail "LuCI default version does not match Cargo $cargo_version"
+# shellcheck disable=SC2016 # Match literal OpenWrt make variables.
+grep -Fq 'PKG_VERSION:=$(TG_PACKAGE_VERSION)' "$makefile" || fail 'LuCI recipe does not use the supplied package version'
+if grep -Eq '^PKG_VERSION:.*[0-9]+\.[0-9]+\.[0-9]+' "$makefile"; then
+    fail 'LuCI recipe duplicates the Cargo package version'
+fi
+builder="$ROOT/openwrt/build-luci-package.sh"
+grep -Fq 'tomllib.load(open(sys.argv[1], "rb"))["package"]["version"]' "$builder" || \
+    fail 'LuCI builder does not default to the Cargo package version'
+# shellcheck disable=SC2016 # Match the literal exported shell variable.
+grep -Fq 'export TG_PACKAGE_VERSION="$VERSION"' "$builder" || \
+    fail 'LuCI builder does not supply its version to every SDK make invocation'
 [[ -f "$ROOT/docs/release-notes/$cargo_version.md" ]] || fail "release notes for $cargo_version are missing"
 # shellcheck disable=SC2016 # Match a literal Bash parameter expansion.
-grep -Fq 'output_name="${output_name//\~/.}"' "$ROOT/openwrt/build-luci-package.sh" || \
+grep -Fq 'output_name="${output_name//\~/.}"' "$builder" || \
     fail 'beta IPK release filename is not normalized before checksums'
 
 workflow="$ROOT/.github/workflows/release.yml"

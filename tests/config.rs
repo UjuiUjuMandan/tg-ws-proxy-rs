@@ -305,6 +305,36 @@ fn a_random_secret_is_generated_only_when_none_was_given() {
     assert_eq!(explicit.secrets, vec![key.to_string()]);
 }
 
+#[test]
+fn normalized_secrets_and_faketls_domain_reuse_startup_storage() {
+    let first = "11111111111111111111111111111111";
+    let second = "22222222222222222222222222222222";
+    let cfg = Config::try_parse_from([
+        "tg-ws-proxy",
+        "--secret",
+        first,
+        "--secret",
+        second,
+        "--listen-faketls-domain",
+        "www.yandex.ru",
+    ])
+    .unwrap()
+    .with_defaults();
+
+    let secrets = cfg.normalized_secrets();
+    assert_eq!(secrets.len(), 2);
+    assert_eq!(secrets[0], hex::decode(first).unwrap());
+    assert_eq!(secrets[1], hex::decode(second).unwrap());
+    assert_eq!(secrets.as_ptr(), cfg.normalized_secrets().as_ptr());
+
+    let domain = cfg.normalized_listen_faketls_domain().unwrap();
+    assert_eq!(domain, "www.yandex.ru");
+    assert_eq!(
+        domain.as_ptr(),
+        cfg.normalized_listen_faketls_domain().unwrap().as_ptr()
+    );
+}
+
 // ─── Upstream MTProto proxies ────────────────────────────────────────────────
 
 #[test]
@@ -321,8 +351,38 @@ fn mtproto_proxy_triplets_are_parsed() {
     assert_eq!(cfg.mtproto_proxies[0].host, "proxy.example");
     assert_eq!(cfg.mtproto_proxies[0].port, 443);
     assert_eq!(cfg.mtproto_proxies[0].secret, secret);
+    assert_eq!(
+        cfg.mtproto_proxies[0].secret_key(),
+        hex::decode(secret).unwrap()
+    );
+    assert_eq!(cfg.mtproto_proxies[0].faketls_hostname(), None);
     assert_eq!(cfg.mtproto_proxies[1].host, "1.2.3.4");
     assert_eq!(cfg.mtproto_proxies[1].port, 8888);
+    assert_eq!(
+        cfg.mtproto_proxies[1].secret_key(),
+        hex::decode(secret).unwrap()
+    );
+}
+
+#[test]
+fn mtproto_proxy_faketls_data_is_normalized_during_parsing() {
+    let key = "00112233445566778899aabbccddeeff";
+    let hostname = "proxy.example";
+    let secret = format!("ee{key}{}", hex::encode(hostname));
+    let cfg = Config::try_parse_from([
+        "tg-ws-proxy",
+        "--mtproto-proxy",
+        &format!("127.0.0.1:443:{secret}"),
+    ])
+    .unwrap();
+
+    let proxy = &cfg.mtproto_proxies[0];
+    assert_eq!(proxy.secret_key(), hex::decode(key).unwrap());
+    assert_eq!(proxy.faketls_hostname(), Some(hostname));
+    assert_eq!(
+        proxy.faketls_hostname().unwrap().as_ptr(),
+        proxy.faketls_hostname().unwrap().as_ptr()
+    );
 }
 
 #[test]
