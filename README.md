@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.png" alt="tg-ws-proxy-rs" width="180">
+</p>
+
 # tg-ws-proxy-rs
 
 **Telegram MTProto WebSocket Bridge Proxy** — a Rust **vibecoded** port of
@@ -5,6 +9,8 @@
 
 Listens for Telegram Desktop's MTProto connections on a local port and
 tunnels them through WebSocket (TLS) connections to Telegram's DC servers.
+
+Telegram channel: [@tg_ws_proxy_rs](https://t.me/tg_ws_proxy_rs).
 
 ```
 Telegram Desktop → MTProto (TCP 1443) → tg-ws-proxy-rs → WS (TLS 443) → Telegram DC
@@ -33,6 +39,11 @@ a `-upx` variant that is ~70% smaller on disk, for routers where flash is
 tight — see [docs/Building.md](docs/Building.md#shrinking-the-binary-for-flash-constrained-devices)
 for the RAM trade-off that comes with it.
 
+The Android app ships on the same page. Take
+`tg-ws-proxy-rs-android-<version>-universal.apk` unless you know your phone's
+ABI — the per-ABI `arm64-v8a`, `armeabi-v7a` and `x86_64` builds are about a
+third of the size. Android 8.0 is the minimum.
+
 ### Docker
 
 Published to Docker Hub as
@@ -59,7 +70,8 @@ The binary lands in `target/release/tg-ws-proxy`. Cross-compiling for OpenWrt
 ### Android
 
 A Jetpack Compose app in `android/` runs the same core as a library: paste the
-CLI flags, start/stop, open the `tg://proxy` link. See
+CLI flags, start/stop, open the `tg://proxy` link. Install the APK from the
+[Releases](../../releases) page, or build it from source — see
 [docs/Android.md](docs/Android.md).
 
 ### OpenWrt
@@ -284,9 +296,13 @@ cooldown are all documented in [docs/Fallbacks.md](docs/Fallbacks.md).
 | [docs/Building.md](docs/Building.md) | Building, cross-compiling for OpenWrt, and shrinking the binary with UPX |
 | [docs/Deployment.md](docs/Deployment.md) | Docker, router deployment, OpenWrt init script, environment variables |
 | [docs/OpenWrtPackage.md](docs/OpenWrtPackage.md) | Standalone APK/IPK builds, UCI/procd configuration, installer, upgrades and rollback |
+| [docs/Android.md](docs/Android.md) | The Android app: Gradle/NDK build, ABI splits, signing, installing and CI |
 | [docs/CfProxy.md](docs/CfProxy.md) | Cloudflare DNS proxy setup, step by step |
 | [docs/CfWorker.md](docs/CfWorker.md) | Cloudflare Worker TCP tunnel setup |
 | [AGENTS.md](AGENTS.md) | Repository layout and conventions for contributors |
+
+Releases and changes are announced on the Telegram channel
+[@tg_ws_proxy_rs](https://t.me/tg_ws_proxy_rs).
 
 ## License
 
