@@ -135,6 +135,34 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Four invariants that no artifact in this workflow can show is broken.
+      # Each is a single token, each was a deliberate decision, and dropping any
+      # one of them leaves every other check in this file green: the APK still
+      # builds, R8 still keeps the callbacks, the emulator still starts the
+      # proxy and passes traffic. The damage only appears on a real phone, or
+      # never visibly at all. So they are asserted against the sources, up front
+      # and before the NDK build, because there is no later point at which their
+      # absence becomes observable.
+      #
+      # Asserted by parsing, not by matching source lines, wherever the
+      # invariant survives reformatting: an XML reindent, an attribute reorder,
+      # a rustfmt or ktlint pass are all legitimate edits that must not turn
+      # this red, and a check that breaks on them gets deleted rather than
+      # fixed. Where a numeric literal is compared it is compared against a
+      # range, so tuning the value stays possible and only removing it fails.
+      #
+      # python3 rather than a series of greps: half of these are XML attributes,
+      # and a single interpreter also means the step runs no pipeline at all,
+      # which is how it stays clear of the `grep -q` SIGPIPE trap documented at
+      # length in the packaged JNI symbol check below.
+      # Invariants no artifact in this workflow can show are broken: dropping any
+      # one leaves every other check green while the damage shows up only on a
+      # real phone. Asserted against the sources, before the NDK build, because
+      # there is no later point at which their absence becomes observable.
+      - name: Check the Android source invariants
+        shell: bash
+        run: python3 .github/scripts/check-android-invariants.py
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
