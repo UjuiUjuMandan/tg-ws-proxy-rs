@@ -65,10 +65,11 @@ class NativeProxyContractTest {
         // exactly like a rejected start that did not.
         assertFalse("a rejected start must not leave a worker behind", NativeProxy.nativeIsRunning())
 
-        // Documented as a no-op when idle, so it costs nothing to call — but it
-        // has to come last. It sets `stopping`, which nothing short of the next
-        // accepted start clears, and every `nativeIsRunning()` above would then
-        // be pinned to false and prove nothing.
+        // Has to come last, and is not free to call even from idle:
+        // `stop_proxy` sets `stopping` unconditionally, whether or not it found
+        // a worker to signal, and nothing short of the next accepted start
+        // clears it. Any earlier and every `nativeIsRunning()` above would be
+        // pinned to false and prove nothing.
         NativeProxy.nativeStop()
     }
 

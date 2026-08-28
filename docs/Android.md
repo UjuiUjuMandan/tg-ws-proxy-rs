@@ -11,14 +11,25 @@ Add `--secret <32 hex chars>` if you want the link to stay the same across
 restarts. `--log-file` is ignored; logs go to the on-screen view and logcat
 (`tg-ws-proxy`).
 
+The default arguments carry `--quiet`, so the on-screen **Log** panel stays
+empty until you remove it. That is the default and not a failed start: drop
+`--quiet` (or swap it for `--verbose`) before tapping **Start** to see log
+lines. The `tg://` link appears either way — it reaches the UI from the listen
+callback rather than by scraping the log, so `--quiet` never hides it.
+
 ## Requirements
 
-- JDK 17+ (the Gradle wrapper downloads a toolchain if needed)
+- JDK 17+ already on `PATH`. The Gradle wrapper downloads *Gradle*, not a JDK:
+  there is no toolchain block and no foojay resolver in this build, so a missing
+  or older JDK fails the build instead of provisioning one.
 - Android SDK at `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or `~/Android/Sdk`
   (compile SDK 37)
 - Android NDK (r27 or newer under `$ANDROID_HOME/ndk/`, or set
   `ANDROID_NDK_HOME` / `ANDROID_NDK`)
 - Rust with `rustup` and `cargo` on `PATH`
+- To run it: a device or emulator on Android 8.0 (API 26) or newer. That is the
+  app's `minSdk`, set from `android/gradle/libs.versions.toml`, and it is a hard
+  floor — the released APKs refuse to install below it.
 
 Gradle installs the required Rust targets with `rustup target add` as part of
 its native build task. If more than one NDK is installed under the SDK, the
@@ -62,6 +73,14 @@ The embedded native library is built in release mode even for a debug APK. A
 debug `.so` is roughly 90 MB per ABI and too slow for normal proxy use. Override
 with `TG_ANDROID_RUST_PROFILE=debug` if you need native debug symbols.
 
+`TG_ANDROID_API` (default 26) selects the NDK clang wrapper the cross-compile
+runs — `aarch64-linux-android<API>-clang` and its siblings — and so is the API
+level the native library itself is built against. The convention plugin reads
+it; it is *not* wired to `minSdk`, which lives in
+`android/gradle/libs.versions.toml`. Raise the two together or not at all: a
+`.so` built against a newer API can bind symbols that the older devices
+`minSdk` still admits do not have, and that failure only appears on the device.
+
 Build only the native libraries:
 
 ```sh
@@ -99,11 +118,17 @@ The same values can be passed as the environment variables
 and `TG_ANDROID_KEY_PASSWORD`, which is how a deploy pipeline signs without
 checking in a properties file. A value set in `keystore.properties` wins over
 the matching environment variable; with neither, `assembleRelease` produces an
-unsigned APK as before. The signed APK lands at `app-release.apk`.
+unsigned APK as before. With one configured the outputs are the same per-ABI
+plus universal set, written as `app-<abi>-release.apk` — the `-unsigned` suffix
+AGP appends is simply gone. There has been no single `app-release.apk` since
+the ABI splits landed.
 
-Generate a keystore once and keep it backed up; Telegram proxy links reference
-the app by package name, and a Play-Store-style upgrade keeps the signing key,
-so replacing the key later means an uninstall/reinstall.
+Generate a keystore once and keep it backed up. Android identifies an installed
+app by its package name *and* its signing key, and it accepts an update only
+when the key matches, so replacing the key later means every existing install
+has to be removed and reinstalled — taking its saved arguments with it. (The
+`tg://proxy` link has no part in this: it carries a host, a port and a secret,
+and nothing about the app that printed it.)
 
 ## Deploy
 
@@ -135,15 +160,51 @@ follows the same list, so `TG_ANDROID_ABIS=arm64-v8a` yields exactly
 
 ## CI
 
-The `android` job in `.github/workflows/ci.yml` builds both the debug and
-release APKs on every pull request, and on pushes to `main` and to release
-tags, uploads them as build artifacts,
-and runs the Gradle wrapper JAR checksum validation via
-`gradle/actions/setup-gradle`. It pins the NDK (`28.1.13356709`) because the
-hosted runner images swap their single installed NDK without notice; update
-both the `sdkmanager --install` line and the `ANDROID_NDK_HOME` export together
-if you bump the pin. The Rust toolchain comes from `dtolnay/rust-toolchain`,
-and `Swatinem/rust-cache` keeps the Android cross-compile outputs across runs.
+Two jobs in `.github/workflows/ci.yml` cover the app, on every pull request and
+on pushes to `main` and to release tags.
+
+**`android` — it builds.** Assembles both the debug and the release APKs
+(release additionally runs R8, which is what exercises `NativeProxy`'s keep rule
+in `proguard-rules.pro`), uploads them as build artifacts, and runs the Gradle
+wrapper JAR checksum validation via `gradle/actions/setup-gradle`. Two shape
+checks follow the build, because both things they look for fail silently:
+
+- *the split APK set* — a `splits` block that stopped applying still yields one
+  perfectly valid fat APK, and a split for an ABI that was never cross-compiled
+  still yields a perfectly valid APK with an empty `lib/`. The job asserts the
+  four expected outputs exist and that each carries exactly the
+  `libtg_ws_proxy_jni.so` set its name claims. Keep its ABI list in sync with
+  `AndroidAbi.defaultAbis`.
+- *the packaged JNI symbols* — a JNI entry point binds by name at the first
+  call, not at link time, so the Kotlin package and the hand-written `Java_…`
+  symbols in `crates/android-jni/src/android.rs` are a contract nothing in the
+  build enforces. The job derives the mangled names from `android.namespace`,
+  checks them against the shipped `.so`'s `.dynsym`, and checks
+  `NATIVE_CLASS_NAME` and the four R8-kept callbacks against the packaged dex.
+
+**`android-emulator` — it runs.** A matrix over API 26 (the `minSdk` floor, and
+the only level that takes `ProxyService`'s pre-O notification-channel and
+pre-34 foreground-service-type branches) and API 36 (`targetSdk`: `specialUse`
+foreground-service enforcement and the `POST_NOTIFICATIONS` path). It pins
+`TG_ANDROID_ABIS=x86_64` at job level and runs the connected suite through
+`.github/scripts/run-connected-tests.sh` — a script file rather than inline
+`script:` lines, because the emulator action wraps each line in its own
+`sh -c`. The suite is `android/app/src/androidTest/`: the JNI contract tests and
+the `nativeStop()` ANR regression. A final step hashes the APK the device was
+actually given against the build's own outputs, so a green run cannot mean the
+emulator quietly installed the universal APK instead of the per-ABI split the
+symbol checks are about.
+
+Both jobs pin the NDK (`28.1.13356709`) because the hosted runner images swap
+their single installed NDK without notice. **The pin appears three times in two
+files** — the `android` and `android-emulator` jobs here and the `android` job
+in `.github/workflows/release.yml` — and each occurrence names the version
+twice, in the `sdkmanager --install` line and in the `ANDROID_NDK_HOME` export.
+Bumping it means editing all six, plus the version quoted above.
+
+The Rust toolchain comes from `dtolnay/rust-toolchain`, and `Swatinem/rust-cache`
+keeps the Android cross-compile outputs across runs, under a separate key per
+job so the two ABI sets cannot evict each other.
 
 The `android` job in `.github/workflows/release.yml` attaches the whole APK set
 to every release, named `tg-ws-proxy-rs-android-<version>-<abi>.apk` — the
