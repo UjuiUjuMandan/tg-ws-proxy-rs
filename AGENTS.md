@@ -19,7 +19,8 @@ MTProto proxy, and raw TCP as successive fallbacks.
 
 ```
 src/
-  main.rs              Entry point: CLI parsing, socket bind, startup banner, connection accept loop
+  main.rs              Thin CLI wrapper: clap parse, tracing, then server::run
+  server.rs            Process-level bind / banner / accept loop (shared by the binary and embedders)
   config.rs            clap-derived Config struct; all CLI flags + TG_* env var fallbacks
   proxy.rs              Core per-connection logic: client handshake, DC routing, WS/CF/TCP fallback chain
   crypto.rs             MTProto obfuscated-transport crypto (AES-256-CTR key derivation, secret layout)
@@ -38,7 +39,10 @@ tests/                   Integration tests (one file per subsystem, mirrors src/
 tests/common/mod.rs      Shared integration fixtures (fake HTTP CONNECT proxy, proxy-connection driver)
 docs/                    User-facing guides. README stays an overview and links here rather than growing:
                          Fallbacks.md (routing tiers), Building.md (cross-compiling, UPX), Deployment.md
-                         (Docker, OpenWrt, env vars), CfProxy.md + CfWorker.md (Cloudflare setup)
+                         (Docker, OpenWrt, env vars), CfProxy.md + CfWorker.md (Cloudflare setup),
+                         Android.md (Compose app + NDK build)
+android/                 Jetpack Compose app (Gradle catalog + build-logic convention; see docs/Android.md)
+crates/android-jni/      JNI start/stop + log callback cdylib; built only by the Android Gradle task
 ```
 
 Modules whose *private* internals need testing keep a `#[cfg(test)] mod tests;` in a sibling
@@ -57,6 +61,29 @@ cargo clippy --all-targets         # CI runs this; keep it clean of new warnings
 cargo fmt                          # run before committing — CI does not auto-format
 cargo build --release              # CI also does a release build with LTO (see Cargo.toml profile)
 ```
+
+**Those cover the root package only.** `Cargo.toml` sets `default-members = ["."]`, which keeps
+`crates/android-jni` out of every bare `cargo build` / `test` / `clippy` at the repository root —
+a `cdylib` in the default set made every desktop and Docker build link an `.so` nobody loads. So
+a change to the JNI shim is compiled by none of the commands above. Reach it by name:
+
+```bash
+cargo fmt --all                                # unlike the others, this does cover crates/
+cargo clippy -p tg-ws-proxy-jni --all-targets  # host: lib.rs only, `mod android` is cfg'd out
+cd android && ./gradlew :app:cargoNdk          # the real compile: cargo build -p … --target <triple>
+```
+
+Note what the host commands do *not* prove. `crates/android-jni/src/android.rs` sits behind
+`#[cfg(target_os = "android")]`, and its dependencies behind a matching
+`[target.'cfg(…)'.dependencies]` table, so off Android the crate is an empty cdylib:
+`cargo clippy -p tg-ws-proxy-jni` type-checks none of the shim. Only the cross-compile does, and
+that needs an NDK.
+
+There is no host-runnable test for the shim either. Its behaviour is covered by the Android
+instrumentation suite in `android/app/src/androidTest/` — the JNI contract tests and the
+`nativeStop()` ANR regression — which `./gradlew :app:connectedDebugAndroidTest` runs against a
+local device or emulator and which CI's `android-emulator` job runs on API 26 and API 36. For
+anything under `crates/android-jni/` or `android/`, that job is the gate; see `docs/Android.md`.
 
 CI (`.github/workflows/ci.yml`) additionally enforces that `Cargo.toml`'s `package.version` is
 strictly greater than the base branch's version on every PR, and matches the git tag on release
@@ -87,11 +114,13 @@ file** rather than leaving both — only the tagged version's file is ever read,
 one's changes would silently go unannounced.
 
 The release is created as a draft and published by the `publish-release` job only once every
-asset (plain and UPX) has uploaded. A failed target therefore leaves a draft rather than a
-half-populated public release: fix or re-run the failed leg, and the same draft is completed and
-published. Anything in `release.yml` that addresses the release by tag name is addressing a draft
-— `.github/workflows/release-dryrun.yml` rehearses those calls on pull requests, so add a
-rehearsal there when adding one.
+asset job has succeeded — `needs: [upload-assets, openwrt-luci, compress-assets, android,
+checksums]`: the plain archives, the LuCI packages, the UPX-compressed copies, the Android APKs,
+and the `SHA256SUMS` that hashes whatever the draft ended up carrying. A failed target therefore
+leaves a draft rather than a half-populated public release: fix or re-run the failed leg, and the
+same draft is completed and published. Anything in `release.yml` that addresses the release by tag
+name is addressing a draft — `.github/workflows/release-dryrun.yml` rehearses those calls on pull
+requests, so add a rehearsal there when adding one.
 
 ## Conventions to follow
 
