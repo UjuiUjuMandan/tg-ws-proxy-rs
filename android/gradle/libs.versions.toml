@@ -1,5 +1,6 @@
 [versions]
 agp = "9.2.1"
+ndk = "28.1.13356709"
 kotlin = "2.2.20"
 compileSdk = "37"
 minSdk = "26"

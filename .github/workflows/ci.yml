@@ -186,15 +186,16 @@ jobs:
 
       # The runner images ship a single NDK and bump it without notice, which
       # silently changes the toolchain used to cross-compile the native library.
-      # Pin it so the .so and CI are reproducible; sdkmanager is a no-op when
-      # the version is already installed. Keep in sync with docs/Android.md.
+      # The version lives in android/gradle/libs.versions.toml and is read
+      # here, by the convention plugin, and by the F-Droid recipe; the
+      # sdkmanager install is a no-op when the version is already present.
       - name: Install pinned Android NDK
         shell: bash
         run: |
           set -euo pipefail
-          ndk="ndk;28.1.13356709"
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "$ndk"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.1.13356709" >> "$GITHUB_ENV"
+          ndk="$(sed -n -E 's/^ndk = "(.+)"/\1/p' android/gradle/libs.versions.toml)"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -432,15 +433,15 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # Same pin, and the same reasoning, as the `android` job above. Keep the
-      # two in sync with each other and with docs/Android.md.
+      # Same pin, and the same reasoning, as the `android` job above: the
+      # version lives only in android/gradle/libs.versions.toml.
       - name: Install pinned Android NDK
         shell: bash
         run: |
           set -euo pipefail
-          ndk="ndk;28.1.13356709"
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "$ndk"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.1.13356709" >> "$GITHUB_ENV"
+          ndk="$(sed -n -E 's/^ndk = "(.+)"/\1/p' android/gradle/libs.versions.toml)"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable

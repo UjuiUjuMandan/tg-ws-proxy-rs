@@ -53,6 +53,11 @@ val cargoHomeProvider = providers.environmentVariable("CARGO_HOME")
 val cargoVersion = providers.cargoAppVersion(repositoryRoot.file("Cargo.toml"))
 val abiCodes = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2, "x86_64" to 3)
 
+// Single source of truth for the NDK: AGP's strip pass and cargoNdk's
+// toolchain both resolve this, CI installs it from the same line, and the
+// F-Droid recipe reads the same file.
+val pinnedNdk = libs.findVersion("ndk").get().requiredVersion
+
 // Release signing. Keep android/keystore.properties out of version control and
 // fill in storeFile/storePassword/keyAlias/keyPassword; CI and scripts can pass
 // the same values as the TG_ANDROID_STORE_FILE / TG_ANDROID_STORE_PASSWORD /
@@ -82,6 +87,7 @@ val cargoNdk = tasks.register<CargoNdkBuildTask>("cargoNdk") {
     apiLevel.set(androidApiProvider)
     androidSdkRoot.set(androidSdkRootProvider)
     androidNdkRoot.set(androidNdkRootProvider)
+    ndkVersion.set(pinnedNdk)
     cargoHome.set(cargoHomeProvider)
 }
 
@@ -91,9 +97,9 @@ pluginManager.withPlugin("com.android.application") {
 
         // The NDK AGP itself uses (its llvm-strip runs over every packaged
         // .so) must resolve everywhere or AGP silently skips the strip and
-        // the .so layout differs between builders. Same pin as the CI
-        // workflows; fdroid installs it via the metadata recipe.
-        ndkVersion = "28.1.13356709"
+        // the .so layout differs between builders. Pinned via the version
+        // catalog; cargoNdk resolves the same line.
+        ndkVersion = pinnedNdk
 
         defaultConfig {
             minSdk = libs.findVersion("minSdk").get().requiredVersion.toInt()

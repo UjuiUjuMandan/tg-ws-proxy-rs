@@ -76,6 +76,9 @@ abstract class CargoNdkBuildTask @Inject constructor(
     abstract val androidNdkRoot: Property<String>
 
     @get:Input
+    abstract val ndkVersion: Property<String>
+
+    @get:Input
     abstract val cargoHome: Property<String>
 
     @TaskAction
@@ -92,7 +95,7 @@ abstract class CargoNdkBuildTask @Inject constructor(
             else -> throw GradleException("TG_ANDROID_RUST_PROFILE must be 'release' or 'debug', got '$rustProfile'")
         }
 
-        val ndkRoot = NdkLocator.resolveNdkRoot(androidNdkRoot.get(), androidSdkRoot.get())
+        val ndkRoot = NdkLocator.resolveNdkRoot(androidNdkRoot.get(), androidSdkRoot.get(), ndkVersion.get())
         val toolchain = ndkRoot.resolve("toolchains/llvm/prebuilt/${NdkLocator.hostTag(ndkRoot)}")
         if (!toolchain.isDirectory) {
             throw GradleException("NDK toolchain missing: ${toolchain.absolutePath}")
