@@ -149,7 +149,7 @@ jobs:
               uses: actions/setup-java@v5
               with:
                   distribution: temurin
-                  java-version: "17"
+                  java-version: "21"
 
             # Rehearsing a transcribed copy of these steps would only prove the
             # copy works, so read release.yml and run the real thing. A renamed
