@@ -44,6 +44,9 @@ val androidSdkRootProvider = providers.environmentVariable("ANDROID_HOME")
 val androidNdkRootProvider = providers.environmentVariable("ANDROID_NDK_HOME")
     .orElse(providers.environmentVariable("ANDROID_NDK"))
     .orElse("")
+val cargoHomeProvider = providers.environmentVariable("CARGO_HOME")
+    .map(String::trim)
+    .orElse(providers.provider { File(System.getProperty("user.home"), ".cargo").absolutePath })
 
 // Cargo.toml is the app version source so F-Droid and Gradle read the same
 // fixed values. CargoAppVersion rejects a version/version_code mismatch.
@@ -79,6 +82,7 @@ val cargoNdk = tasks.register<CargoNdkBuildTask>("cargoNdk") {
     apiLevel.set(androidApiProvider)
     androidSdkRoot.set(androidSdkRootProvider)
     androidNdkRoot.set(androidNdkRootProvider)
+    cargoHome.set(cargoHomeProvider)
 }
 
 pluginManager.withPlugin("com.android.application") {

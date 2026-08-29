@@ -75,6 +75,9 @@ abstract class CargoNdkBuildTask @Inject constructor(
     @get:Input
     abstract val androidNdkRoot: Property<String>
 
+    @get:Input
+    abstract val cargoHome: Property<String>
+
     @TaskAction
     fun build() {
         val selectedAbis = abis.get().map(String::trim).filter(String::isNotEmpty)
@@ -98,6 +101,19 @@ abstract class CargoNdkBuildTask @Inject constructor(
         val toolchainBin = toolchain.resolve("bin")
         val root = repoRoot.asFile.get()
         val outputRoot = jniLibsDir.asFile.get()
+
+        // Panic Location strings bake the absolute path rustc was given into
+        // .rodata — strip=true cannot remove them. Registry sources live under
+        // CARGO_HOME and workspace sources under the checkout, so both are
+        // remapped to fixed prefixes or the .so differs between build users
+        // (CI's /home/runner vs F-Droid's /home/vagrant).
+        val cargoHomePath = cargoHome.get()
+        val rustflags = mutableListOf(
+            "--remap-path-prefix=$cargoHomePath=/cargo",
+            "--remap-path-prefix=${root.absolutePath}=/build",
+        )
+        System.getenv("RUSTFLAGS")?.trim()?.takeIf(String::isNotEmpty)?.let(rustflags::add)
+
         val supportedAbis = AndroidAbi.triples.keys
         outputRoot.listFiles()
             ?.filter { it.isDirectory && it.name in supportedAbis && it.name !in selectedAbis }
@@ -153,6 +169,8 @@ abstract class CargoNdkBuildTask @Inject constructor(
                 environment("AR_$ccEnv", llvmAr.absolutePath)
                 environment("CARGO_TARGET_${targetEnv}_LINKER", clang.absolutePath)
                 environment("CARGO_TARGET_${targetEnv}_AR", llvmAr.absolutePath)
+                environment("CARGO_HOME", cargoHomePath)
+                environment("RUSTFLAGS", rustflags.joinToString(" "))
                 commandLine(NdkLocator.hostExecutable("cargo"), *cargoArgs.toTypedArray())
             }
 
