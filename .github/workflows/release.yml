@@ -209,7 +209,7 @@ jobs:
               uses: actions/setup-java@v5
               with:
                   distribution: temurin
-                  java-version: "21"
+                  java-version: "17"
 
             # Performs the Gradle wrapper JAR checksum validation, same as CI.
             - name: Set up Gradle
