@@ -89,6 +89,12 @@ pluginManager.withPlugin("com.android.application") {
     extensions.configure<ApplicationExtension>("android") {
         compileSdk = libs.findVersion("compileSdk").get().requiredVersion.toInt()
 
+        // The NDK AGP itself uses (its llvm-strip runs over every packaged
+        // .so) must resolve everywhere or AGP silently skips the strip and
+        // the .so layout differs between builders. Same pin as the CI
+        // workflows; fdroid installs it via the metadata recipe.
+        ndkVersion = "28.1.13356709"
+
         defaultConfig {
             minSdk = libs.findVersion("minSdk").get().requiredVersion.toInt()
             targetSdk = libs.findVersion("targetSdk").get().requiredVersion.toInt()
