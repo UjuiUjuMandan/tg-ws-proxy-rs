@@ -11,18 +11,29 @@ class CargoAppVersion(
 )
 
 fun ProviderFactory.cargoAppVersion(cargoToml: RegularFile): CargoAppVersion {
-    val parts = fileContents(cargoToml).asText.map { text ->
-        Regex("""^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"""", RegexOption.MULTILINE)
+    val version = fileContents(cargoToml).asText.map { text ->
+        val parts = Regex("""^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"""", RegexOption.MULTILINE)
             .find(text)
             ?.groupValues
             ?.drop(1)
             ?: throw GradleException("could not parse package.version from Cargo.toml")
+        val versionCode = Regex("""^version_code\s*=\s*(\d+)""", RegexOption.MULTILINE)
+            .find(text)
+            ?.groupValues
+            ?.get(1)
+            ?.toInt()
+            ?: throw GradleException("could not parse package.metadata.android.version_code from Cargo.toml")
+        val (major, minor, patch) = parts.map(String::toInt)
+        val expectedVersionCode = (major * 10000 + minor * 100 + patch) * 10
+        if (versionCode != expectedVersionCode) {
+            throw GradleException(
+                "package.metadata.android.version_code must be $expectedVersionCode for ${parts.joinToString(".")}",
+            )
+        }
+        parts.joinToString(".") to versionCode
     }
     return CargoAppVersion(
-        versionName = parts.map { it.joinToString(".") },
-        versionCode = parts.map { versionParts ->
-            val (major, minor, patch) = versionParts.map(String::toInt)
-            major * 10000 + minor * 100 + patch
-        },
+        versionName = version.map { it.first },
+        versionCode = version.map { it.second },
     )
 }

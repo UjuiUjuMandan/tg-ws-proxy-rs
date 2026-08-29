@@ -1,4 +1,6 @@
 import com.android.build.api.dsl.ApplicationExtension
+import com.android.build.api.variant.ApplicationAndroidComponentsExtension
+import com.android.build.api.variant.FilterConfiguration
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 import tgwsproxy.gradle.AndroidAbi
@@ -30,10 +32,10 @@ val androidNdkRootProvider = providers.environmentVariable("ANDROID_NDK_HOME")
     .orElse(providers.environmentVariable("ANDROID_NDK"))
     .orElse("")
 
-// The app version always tracks Cargo.toml, the repo's single source of truth
-// (CI bumps it on every PR). Keep versionCode deterministic and collision-free
-// for any X.Y.Z: MAJOR*10000 + MINOR*100 + PATCH.
+// Cargo.toml is the app version source so F-Droid and Gradle read the same
+// fixed values. CargoAppVersion rejects a version/version_code mismatch.
 val cargoVersion = providers.cargoAppVersion(repositoryRoot.file("Cargo.toml"))
+val abiCodes = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2, "x86_64" to 3)
 
 // Release signing. Keep android/keystore.properties out of version control and
 // fill in storeFile/storePassword/keyAlias/keyPassword; CI and scripts can pass
@@ -107,11 +109,6 @@ pluginManager.withPlugin("com.android.application") {
                 // deliberately excluded.
                 reset()
                 include(*rustAbisProvider.get().toTypedArray())
-                // Deliberately no per-ABI versionCode offsets: those exist so
-                // Play can pick one APK out of a multi-APK listing, and these
-                // are downloaded by filename instead. One shared versionCode
-                // also makes moving between the universal APK and a split an
-                // in-place update rather than a blocked downgrade.
                 isUniversalApk = true
             }
         }
@@ -151,6 +148,19 @@ pluginManager.withPlugin("com.android.application") {
 
     tasks.named("preBuild") {
         dependsOn(cargoNdk)
+    }
+
+    extensions.configure<ApplicationAndroidComponentsExtension>("androidComponents") {
+        onVariants { variant ->
+            variant.outputs.forEach { output ->
+                val abiCode = output.filters
+                    .find { it.filterType == FilterConfiguration.FilterType.ABI }
+                    ?.identifier
+                    ?.let(abiCodes::get)
+                    ?: 0
+                output.versionCode.set(cargoVersion.versionCode.map { it + abiCode })
+            }
+        }
     }
 }
 

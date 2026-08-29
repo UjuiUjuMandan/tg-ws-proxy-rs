@@ -11,6 +11,10 @@ documentation = "https://docs.rs/tg-ws-proxy-rs"
 keywords = ["telegram", "mtproto", "websocket", "proxy", "rust"]
 categories = ["network-programming", "command-line-utilities"]
 
+[package.metadata.android]
+# This must match (MAJOR * 10000 + MINOR * 100 + PATCH) * 10.
+version_code = 203000
+
 # The JNI shim is a separate crate because `crate-type` is a per-package
 # setting: a `["lib", "cdylib"]` root made every desktop and Docker
 # `cargo build` additionally link an .so nobody loads. `default-members` keeps
