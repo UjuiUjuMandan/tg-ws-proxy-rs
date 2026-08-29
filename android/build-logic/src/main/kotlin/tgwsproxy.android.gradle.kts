@@ -1,6 +1,7 @@
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import com.android.build.api.variant.FilterConfiguration
+import org.gradle.api.GradleException
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 import tgwsproxy.gradle.AndroidAbi
@@ -19,8 +20,20 @@ val generatedJniLibsDir = layout.buildDirectory.dir("generated/rustJniLibs")
 // Native code is always release unless TG_ANDROID_RUST_PROFILE=debug because a
 // debug libtg_ws_proxy_jni.so is roughly 90 MB per ABI and too slow for a proxy.
 val rustProfileProvider = providers.environmentVariable("TG_ANDROID_RUST_PROFILE").orElse("release")
-val rustAbisProvider = providers.environmentVariable("TG_ANDROID_ABIS")
-    .map { value -> value.split(Regex("[,\\s]+")).filter(String::isNotBlank) }
+val gradleAbisProvider = providers.gradleProperty("TG_ANDROID_ABIS").map { value ->
+    value.split(Regex("[,\\s]+")).filter(String::isNotBlank).also { abis ->
+        if (abis.size != 1 || abis.single() !in AndroidAbi.defaultAbis) {
+            throw GradleException(
+                "Gradle property TG_ANDROID_ABIS must be one of ${AndroidAbi.defaultAbis.joinToString()}, got '$value'",
+            )
+        }
+    }
+}
+val rustAbisProvider = gradleAbisProvider
+    .orElse(
+        providers.environmentVariable("TG_ANDROID_ABIS")
+            .map { value -> value.split(Regex("[,\\s]+")).filter(String::isNotBlank) },
+    )
     .orElse(AndroidAbi.defaultAbis)
 val androidApiProvider = providers.environmentVariable("TG_ANDROID_API")
     .map(String::toInt)
@@ -83,7 +96,9 @@ pluginManager.withPlugin("com.android.application") {
             // leave resting on a flag's default value.
             testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
             ndk {
-                abiFilters += rustAbisProvider.get()
+                if (!gradleAbisProvider.isPresent && rustAbisProvider.get().size > 1) {
+                    abiFilters += rustAbisProvider.get()
+                }
             }
         }
 
@@ -105,11 +120,11 @@ pluginManager.withPlugin("com.android.application") {
                 isEnable = true
                 // AGP's default include set is every ABI it knows about, and
                 // include() only adds to it, so without reset() a narrowed
-                // TG_ANDROID_ABIS would still demand splits for the ABIs it
+                // A narrowed ABI selection would still demand splits for ABIs it
                 // deliberately excluded.
                 reset()
                 include(*rustAbisProvider.get().toTypedArray())
-                isUniversalApk = true
+                isUniversalApk = !gradleAbisProvider.isPresent
             }
         }
 
