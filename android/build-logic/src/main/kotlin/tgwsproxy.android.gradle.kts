@@ -108,9 +108,7 @@ pluginManager.withPlugin("com.android.application") {
             // leave resting on a flag's default value.
             testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
             ndk {
-                if (!gradleAbisProvider.isPresent && rustAbisProvider.get().size > 1) {
-                    abiFilters += rustAbisProvider.get()
-                }
+                abiFilters += rustAbisProvider.get()
             }
         }
 
