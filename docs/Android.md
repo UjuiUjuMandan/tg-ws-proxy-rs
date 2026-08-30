@@ -45,6 +45,13 @@ base code must be `(MAJOR*10000 + MINOR*100 + PATCH)*10`; the
 per-ABI offset: `0` for universal, `1` for armeabi-v7a, `2` for arm64-v8a, and
 `3` for x86_64.
 
+Do not add XML comments to `android/app/src/main/AndroidManifest.xml`. An A/B
+build of the same commit confirmed that AGP's manifest merger can format a
+comment differently between GitHub Actions and the F-Droid buildserver. The
+decoded manifests remain identical, but the shifted source line numbers in the
+binary AXML make the APKs differ byte for byte. Put explanations in this guide
+or beside the code that enforces the manifest setting instead.
+
 Plugin, SDK and AndroidX versions live in `android/gradle/libs.versions.toml`.
 The Cargo NDK task, version mapping and release signing live under
 `android/build-logic/` so `android/app/build.gradle.kts` stays the module identity
