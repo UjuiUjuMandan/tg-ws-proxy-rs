@@ -194,7 +194,10 @@ foreground-service enforcement and the `POST_NOTIFICATIONS` path). It pins
 `.github/scripts/run-connected-tests.sh` — a script file rather than inline
 `script:` lines, because the emulator action wraps each line in its own
 `sh -c`. The suite is `android/app/src/androidTest/`: the JNI contract tests and
-the `nativeStop()` ANR regression.
+the `nativeStop()` ANR regression. A final step hashes the APK the device was
+actually given against the build's own outputs, so a green run cannot mean the
+emulator quietly installed the universal APK instead of the per-ABI split the
+symbol checks are about.
 
 Both jobs pin the NDK because the hosted runner images swap their installed NDK
 without notice. The pin has one source of truth: the `ndk` entry in
