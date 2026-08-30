@@ -24,22 +24,33 @@ callback rather than by scraping the log, so `--quiet` never hides it.
   or older JDK fails the build instead of provisioning one.
 - Android SDK at `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or `~/Android/Sdk`
   (compile SDK 37)
-- Android NDK (r27 or newer under `$ANDROID_HOME/ndk/`, or set
-  `ANDROID_NDK_HOME` / `ANDROID_NDK`)
+- The Android NDK version pinned in `android/gradle/libs.versions.toml`
+  (currently `28.1.13356709`) under `$ANDROID_HOME/ndk/`, or set
+  `ANDROID_NDK_HOME` / `ANDROID_NDK` to an explicit NDK directory
 - Rust with `rustup` and `cargo` on `PATH`
 - To run it: a device or emulator on Android 8.0 (API 26) or newer. That is the
   app's `minSdk`, set from `android/gradle/libs.versions.toml`, and it is a hard
   floor — the released APKs refuse to install below it.
 
 Gradle installs the required Rust targets with `rustup target add` as part of
-its native build task. If more than one NDK is installed under the SDK, the
-newest version directory is used unless `ANDROID_NDK_HOME` or `ANDROID_NDK` is
-set.
+its native build task. Unless `ANDROID_NDK_HOME` or `ANDROID_NDK` is set, it
+uses exactly the NDK version pinned in the version catalog and fails with the
+required `sdkmanager --install` command when that version is absent.
 
-The app's `versionName` and `versionCode` come from `Cargo.toml`, the repo's
-single source of truth (CI enforces a bump on every PR): `MAJOR*10000 +
-MINOR*100 + PATCH`. Never hand-edit those values; they are wired by the
-`tgwsproxy.android` convention plugin. Bump `Cargo.toml` instead.
+The app's `versionName` and base `versionCode` come from `Cargo.toml`, the
+repo's single source of truth (CI enforces a version bump on every PR). Update
+`package.version` and `package.metadata.android.version_code` together. The
+base code must be `(MAJOR*10000 + MINOR*100 + PATCH)*10`; the
+`tgwsproxy.android` convention plugin validates that relationship and adds the
+per-ABI offset: `0` for universal, `1` for armeabi-v7a, `2` for arm64-v8a, and
+`3` for x86_64.
+
+Do not add XML comments to `android/app/src/main/AndroidManifest.xml`. An A/B
+build of the same commit confirmed that AGP's manifest merger can format a
+comment differently between GitHub Actions and the F-Droid buildserver. The
+decoded manifests remain identical, but the shifted source line numbers in the
+binary AXML make the APKs differ byte for byte. Put explanations in this guide
+or beside the code that enforces the manifest setting instead.
 
 Plugin, SDK and AndroidX versions live in `android/gradle/libs.versions.toml`.
 The Cargo NDK task, version mapping and release signing live under
@@ -195,12 +206,11 @@ actually given against the build's own outputs, so a green run cannot mean the
 emulator quietly installed the universal APK instead of the per-ABI split the
 symbol checks are about.
 
-Both jobs pin the NDK (`28.1.13356709`) because the hosted runner images swap
-their single installed NDK without notice. **The pin appears three times in two
-files** — the `android` and `android-emulator` jobs here and the `android` job
-in `.github/workflows/release.yml` — and each occurrence names the version
-twice, in the `sdkmanager --install` line and in the `ANDROID_NDK_HOME` export.
-Bumping it means editing all six, plus the version quoted above.
+Both jobs pin the NDK because the hosted runner images swap their installed NDK
+without notice. The pin has one source of truth: the `ndk` entry in
+`android/gradle/libs.versions.toml`. CI, release builds, the convention plugin,
+and the F-Droid recipe all read that value, so bumping the NDK means editing
+that one line.
 
 The Rust toolchain comes from `dtolnay/rust-toolchain`, and `Swatinem/rust-cache`
 keeps the Android cross-compile outputs across runs, under a separate key per

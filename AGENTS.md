@@ -89,7 +89,9 @@ CI (`.github/workflows/ci.yml`) additionally enforces that `Cargo.toml`'s `packa
 strictly greater than the base branch's version on every PR, and matches the git tag on release
 builds. **Any change destined for `main` must bump the `version` field in `Cargo.toml`** (and let
 `cargo build` regenerate the matching line in `Cargo.lock`) — the CI job `release-version` fails
-the PR otherwise.
+the PR otherwise. In the same commit, **update `package.metadata.android.version_code` in `Cargo.toml`**
+to `(MAJOR*10000 + MINOR*100 + PATCH)*10` (e.g. `2.3.1` -> `203010`); the Android Gradle build
+validates this consistency check and will fail otherwise.
 
 ## Releases
 

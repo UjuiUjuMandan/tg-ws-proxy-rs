@@ -84,9 +84,20 @@ jobs:
               with:
                   components: rust-src
 
-            - name: Install stable Rust
+            - name: Read pinned Rust toolchain
               if: ${{ !matrix.build_std }}
-              uses: dtolnay/rust-toolchain@stable
+              id: rust-toolchain
+              shell: bash
+              run: |
+                  toolchain="$(sed -n -E 's/^channel = "(.+)"/\1/p' rust-toolchain.toml)"
+                  test -n "$toolchain"
+                  echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
+
+            - name: Install pinned Rust
+              if: ${{ !matrix.build_std }}
+              uses: dtolnay/rust-toolchain@master
+              with:
+                  toolchain: ${{ steps.rust-toolchain.outputs.toolchain }}
 
             - name: Install cross
               run: cargo install cross --locked

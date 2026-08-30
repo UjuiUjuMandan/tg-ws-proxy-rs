@@ -116,10 +116,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Read pinned Rust toolchain
+        id: rust-toolchain
+        shell: bash
+        run: |
+          toolchain="$(sed -n -E 's/^channel = "(.+)"/\1/p' rust-toolchain.toml)"
+          test -n "$toolchain"
+          echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           components: clippy
+          toolchain: ${{ steps.rust-toolchain.outputs.toolchain }}
 
       - name: Clippy
         run: cargo clippy --all-targets --locked
@@ -179,18 +188,29 @@ jobs:
 
       # The runner images ship a single NDK and bump it without notice, which
       # silently changes the toolchain used to cross-compile the native library.
-      # Pin it so the .so and CI are reproducible; sdkmanager is a no-op when
-      # the version is already installed. Keep in sync with docs/Android.md.
+      # The version lives in android/gradle/libs.versions.toml and is read
+      # here, by the convention plugin, and by the F-Droid recipe; the
+      # sdkmanager install is a no-op when the version is already present.
       - name: Install pinned Android NDK
         shell: bash
         run: |
           set -euo pipefail
-          ndk="ndk;28.1.13356709"
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "$ndk"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.1.13356709" >> "$GITHUB_ENV"
+          ndk="$(sed -n -E 's/^ndk = "(.+)"/\1/p' android/gradle/libs.versions.toml)"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
+
+      - name: Read pinned Rust toolchain
+        id: rust-toolchain
+        shell: bash
+        run: |
+          toolchain="$(sed -n -E 's/^channel = "(.+)"/\1/p' rust-toolchain.toml)"
+          test -n "$toolchain"
+          echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust-toolchain.outputs.toolchain }}
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -425,18 +445,28 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # Same pin, and the same reasoning, as the `android` job above. Keep the
-      # two in sync with each other and with docs/Android.md.
+      # Same pin, and the same reasoning, as the `android` job above: the
+      # version lives only in android/gradle/libs.versions.toml.
       - name: Install pinned Android NDK
         shell: bash
         run: |
           set -euo pipefail
-          ndk="ndk;28.1.13356709"
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "$ndk"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.1.13356709" >> "$GITHUB_ENV"
+          ndk="$(sed -n -E 's/^ndk = "(.+)"/\1/p' android/gradle/libs.versions.toml)"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
+
+      - name: Read pinned Rust toolchain
+        id: rust-toolchain
+        shell: bash
+        run: |
+          toolchain="$(sed -n -E 's/^channel = "(.+)"/\1/p' rust-toolchain.toml)"
+          test -n "$toolchain"
+          echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust-toolchain.outputs.toolchain }}
 
       # A separate cache key from the `android` job: this one only ever builds
       # the x86_64 target, so sharing would make each job evict the other's.
@@ -525,19 +555,6 @@ jobs:
       # emulator never loaded the artifact those assertions were about, and
       # nothing would say so. Identify the installed APK by hash, so this
       # names a file rather than trusting one.
-      #
-      # One hash can match both names, and that is not a failure. This job pins
-      # TG_ANDROID_ABIS to the single ABI the emulator can run, and the
-      # convention plugin hands that one-element list to both
-      # defaultConfig.ndk.abiFilters and splits.abi.include() while keeping the
-      # universal APK and one shared versionCode. The two outputs are then
-      # packaged from an identical input set -- same dex, same resources, the
-      # same lone lib/x86_64/libtg_ws_proxy_jni.so, same manifest -- and come
-      # out byte-identical. Two names for one file means the device ran these
-      # bytes whichever name AGP reached for, and there is no packaging
-      # difference left for this step to catch, so say so and pass. It still
-      # bites for any ABI set with more than one entry, which is where the
-      # universal APK genuinely carries libraries the split does not.
       - name: Check which APK the tests ran against
         working-directory: android
         shell: bash
@@ -556,19 +573,11 @@ jobs:
             exit 1
           fi
           echo "connectedDebugAndroidTest ran against: ${matched[*]}"
-          split=""
-          for candidate in "${matched[@]}"; do
-            [[ "$candidate" == "app-x86_64-debug.apk" ]] && split="$candidate"
-          done
-          if [[ -z "$split" ]]; then
+          if [[ "${matched[*]}" != "app-x86_64-debug.apk" ]]; then
             echo "::error::the tests installed ${matched[*]}, expected" \
               "app-x86_64-debug.apk — the per-ABI split is the packaging this" \
               "job exists to load on a device"
             exit 1
-          fi
-          if [[ "${#matched[@]}" -gt 1 ]]; then
-            echo "(these outputs are byte-identical, so the device loaded the" \
-              "per-ABI packaging under whichever name AGP installed)"
           fi
 
       # The Gradle failure message names the test but not why it failed; the

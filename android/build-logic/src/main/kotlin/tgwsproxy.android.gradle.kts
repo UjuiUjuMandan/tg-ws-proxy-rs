@@ -1,4 +1,7 @@
 import com.android.build.api.dsl.ApplicationExtension
+import com.android.build.api.variant.ApplicationAndroidComponentsExtension
+import com.android.build.api.variant.FilterConfiguration
+import org.gradle.api.GradleException
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 import tgwsproxy.gradle.AndroidAbi
@@ -17,8 +20,20 @@ val generatedJniLibsDir = layout.buildDirectory.dir("generated/rustJniLibs")
 // Native code is always release unless TG_ANDROID_RUST_PROFILE=debug because a
 // debug libtg_ws_proxy_jni.so is roughly 90 MB per ABI and too slow for a proxy.
 val rustProfileProvider = providers.environmentVariable("TG_ANDROID_RUST_PROFILE").orElse("release")
-val rustAbisProvider = providers.environmentVariable("TG_ANDROID_ABIS")
-    .map { value -> value.split(Regex("[,\\s]+")).filter(String::isNotBlank) }
+val gradleAbisProvider = providers.gradleProperty("TG_ANDROID_ABIS").map { value ->
+    value.split(Regex("[,\\s]+")).filter(String::isNotBlank).also { abis ->
+        if (abis.size != 1 || abis.single() !in AndroidAbi.defaultAbis) {
+            throw GradleException(
+                "Gradle property TG_ANDROID_ABIS must be one of ${AndroidAbi.defaultAbis.joinToString()}, got '$value'",
+            )
+        }
+    }
+}
+val rustAbisProvider = gradleAbisProvider
+    .orElse(
+        providers.environmentVariable("TG_ANDROID_ABIS")
+            .map { value -> value.split(Regex("[,\\s]+")).filter(String::isNotBlank) },
+    )
     .orElse(AndroidAbi.defaultAbis)
 val androidApiProvider = providers.environmentVariable("TG_ANDROID_API")
     .map(String::toInt)
@@ -30,10 +45,15 @@ val androidNdkRootProvider = providers.environmentVariable("ANDROID_NDK_HOME")
     .orElse(providers.environmentVariable("ANDROID_NDK"))
     .orElse("")
 
-// The app version always tracks Cargo.toml, the repo's single source of truth
-// (CI bumps it on every PR). Keep versionCode deterministic and collision-free
-// for any X.Y.Z: MAJOR*10000 + MINOR*100 + PATCH.
+// Cargo.toml is the app version source so F-Droid and Gradle read the same
+// fixed values. CargoAppVersion rejects a version/version_code mismatch.
 val cargoVersion = providers.cargoAppVersion(repositoryRoot.file("Cargo.toml"))
+val abiCodes = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2, "x86_64" to 3)
+
+// Single source of truth for the NDK: AGP's strip pass and cargoNdk's
+// toolchain both resolve this, CI installs it from the same line, and the
+// F-Droid recipe reads the same file.
+val pinnedNdk = libs.findVersion("ndk").get().requiredVersion
 
 // Release signing. Keep android/keystore.properties out of version control and
 // fill in storeFile/storePassword/keyAlias/keyPassword; CI and scripts can pass
@@ -64,11 +84,18 @@ val cargoNdk = tasks.register<CargoNdkBuildTask>("cargoNdk") {
     apiLevel.set(androidApiProvider)
     androidSdkRoot.set(androidSdkRootProvider)
     androidNdkRoot.set(androidNdkRootProvider)
+    ndkVersion.set(pinnedNdk)
 }
 
 pluginManager.withPlugin("com.android.application") {
     extensions.configure<ApplicationExtension>("android") {
         compileSdk = libs.findVersion("compileSdk").get().requiredVersion.toInt()
+
+        // The NDK AGP itself uses (its llvm-strip runs over every packaged
+        // .so) must resolve everywhere or AGP silently skips the strip and
+        // the .so layout differs between builders. Pinned via the version
+        // catalog; cargoNdk resolves the same line.
+        ndkVersion = pinnedNdk
 
         defaultConfig {
             minSdk = libs.findVersion("minSdk").get().requiredVersion.toInt()
@@ -80,9 +107,6 @@ pluginManager.withPlugin("com.android.application") {
             // packaged .so is the one the device can load — too load-bearing to
             // leave resting on a flag's default value.
             testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-            ndk {
-                abiFilters += rustAbisProvider.get()
-            }
         }
 
         sourceSets.named("main") {
@@ -94,25 +118,19 @@ pluginManager.withPlugin("com.android.application") {
         // ABI for the downloader the way Play does, so the universal APK stays
         // the "just download it" artifact and the per-ABI ones are the roughly
         // one-third-size alternative for anyone who knows their device. The
-        // include set comes from the same provider as defaultConfig.ndk
-        // .abiFilters above: a split for an ABI cargoNdk never cross-compiled
-        // still builds and installs, then dies in System.loadLibrary on first
-        // launch, so the two lists must not be allowed to drift apart.
+        // include set comes from rustAbisProvider: a split for an ABI cargoNdk
+        // never cross-compiled still builds and installs, then dies in
+        // System.loadLibrary on first launch.
         splits {
             abi {
                 isEnable = true
                 // AGP's default include set is every ABI it knows about, and
                 // include() only adds to it, so without reset() a narrowed
-                // TG_ANDROID_ABIS would still demand splits for the ABIs it
+                // ABI selection would still demand splits for ABIs it
                 // deliberately excluded.
                 reset()
                 include(*rustAbisProvider.get().toTypedArray())
-                // Deliberately no per-ABI versionCode offsets: those exist so
-                // Play can pick one APK out of a multi-APK listing, and these
-                // are downloaded by filename instead. One shared versionCode
-                // also makes moving between the universal APK and a split an
-                // in-place update rather than a blocked downgrade.
-                isUniversalApk = true
+                isUniversalApk = !gradleAbisProvider.isPresent
             }
         }
 
@@ -151,6 +169,19 @@ pluginManager.withPlugin("com.android.application") {
 
     tasks.named("preBuild") {
         dependsOn(cargoNdk)
+    }
+
+    extensions.configure<ApplicationAndroidComponentsExtension>("androidComponents") {
+        onVariants { variant ->
+            variant.outputs.forEach { output ->
+                val abiCode = output.filters
+                    .find { it.filterType == FilterConfiguration.FilterType.ABI }
+                    ?.identifier
+                    ?.let(abiCodes::get)
+                    ?: 0
+                output.versionCode.set(cargoVersion.versionCode.map { it + abiCode })
+            }
+        }
     }
 }
 

@@ -5,20 +5,21 @@ import java.io.File
 import java.util.Locale
 
 internal object NdkLocator {
-    fun resolveNdkRoot(explicitNdkRoot: String, androidSdkRoot: String): File {
+    fun resolveNdkRoot(explicitNdkRoot: String, androidSdkRoot: String, pinnedVersion: String): File {
         val explicit = explicitNdkRoot.trim()
         if (explicit.isNotEmpty()) {
             return File(explicit)
         }
 
-        val ndkDir = File(androidSdkRoot).resolve("ndk")
-        if (!ndkDir.isDirectory) {
-            throw GradleException("no NDK found under ${ndkDir.absolutePath}; set ANDROID_NDK_HOME")
+        val pinned = File(androidSdkRoot).resolve("ndk/$pinnedVersion")
+        if (!pinned.isDirectory) {
+            throw GradleException(
+                "pinned NDK $pinnedVersion not found at ${pinned.absolutePath}; " +
+                    "run: sdkmanager --install \"ndk;$pinnedVersion\"",
+            )
         }
 
-        return ndkDir.listFiles { file -> file.isDirectory }
-            ?.maxWithOrNull { left, right -> compareVersions(left.name, right.name) }
-            ?: throw GradleException("no NDK versions found under ${ndkDir.absolutePath}; set ANDROID_NDK_HOME")
+        return pinned
     }
 
     fun hostTag(ndkRoot: File): String {
@@ -61,24 +62,4 @@ internal object NdkLocator {
 
     private fun isWindows(): Boolean =
         System.getProperty("os.name").lowercase(Locale.US).contains("windows")
-
-    private fun compareVersions(left: String, right: String): Int {
-        val leftParts = left.split(Regex("[^0-9]+")).filter(String::isNotEmpty).map(String::toLong)
-        val rightParts = right.split(Regex("[^0-9]+")).filter(String::isNotEmpty).map(String::toLong)
-        val max = maxOf(leftParts.size, rightParts.size)
-        for (index in 0 until max) {
-            val diff = (leftParts.getOrElse(index) { 0L } - rightParts.getOrElse(index) { 0L }).sign
-            if (diff != 0) {
-                return diff
-            }
-        }
-        return left.compareTo(right)
-    }
-
-    private val Long.sign: Int
-        get() = when {
-            this < 0 -> -1
-            this > 0 -> 1
-            else -> 0
-        }
 }

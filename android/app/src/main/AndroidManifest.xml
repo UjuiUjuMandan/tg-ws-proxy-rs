@@ -6,14 +6,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- The only thing this app persists is the argument string, and that
-         string can carry the 32 hex character proxy secret. Nothing here is
-         worth restoring, so backup is refused outright instead of excluding
-         the prefs file: one attribute covers cloud backup, device to device
-         transfer and adb backup at every SDK level, whereas data extraction
-         rules would need a second XML for the pre-31 levels this app still
-         supports, and would still hand the secret to a new phone on
-         transfer. -->
     <application
         android:name=".TgWsProxyApp"
         android:allowBackup="false"
