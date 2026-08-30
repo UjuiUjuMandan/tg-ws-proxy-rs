@@ -11,7 +11,7 @@ ARG TARGETPLATFORM
 # The Android JNI shim is a workspace member, so cargo refuses to load the
 # workspace without its manifest and a lib source -- even though
 # `default-members` keeps it out of every build in this image.
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/android-jni/Cargo.toml ./crates/android-jni/Cargo.toml
 
 RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \

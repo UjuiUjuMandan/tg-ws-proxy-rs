@@ -64,7 +64,22 @@ jobs:
         steps:
             - uses: actions/checkout@v6
 
-            # Default path (all targets except mipsel)
+            - name: Read pinned Rust toolchain
+              if: matrix.target != 'mipsel-unknown-linux-musl' && matrix.target != 'mips-unknown-linux-musl'
+              id: rust-toolchain
+              shell: bash
+              run: |
+                  toolchain="$(sed -n -E 's/^channel = "(.+)"/\1/p' rust-toolchain.toml)"
+                  test -n "$toolchain"
+                  echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
+
+            - name: Install pinned Rust
+              if: matrix.target != 'mipsel-unknown-linux-musl' && matrix.target != 'mips-unknown-linux-musl'
+              uses: dtolnay/rust-toolchain@master
+              with:
+                  toolchain: ${{ steps.rust-toolchain.outputs.toolchain }}
+
+            # Default path (all targets except the mips variants)
             - name: Build & upload (default)
               if: matrix.target != 'mipsel-unknown-linux-musl' && matrix.target != 'mips-unknown-linux-musl'
               uses: taiki-e/upload-rust-binary-action@v1
@@ -228,8 +243,18 @@ jobs:
                   "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk"
                   echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
 
+            - name: Read pinned Rust toolchain
+              id: rust-toolchain
+              shell: bash
+              run: |
+                  toolchain="$(sed -n -E 's/^channel = "(.+)"/\1/p' rust-toolchain.toml)"
+                  test -n "$toolchain"
+                  echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
+
             - name: Set up Rust
-              uses: dtolnay/rust-toolchain@stable
+              uses: dtolnay/rust-toolchain@master
+              with:
+                  toolchain: ${{ steps.rust-toolchain.outputs.toolchain }}
 
             # A keystore is a binary file, so the secret carries it base64-encoded
             # and only the path reaches Gradle. No `set -x` anywhere in this job:
