@@ -555,19 +555,6 @@ jobs:
       # emulator never loaded the artifact those assertions were about, and
       # nothing would say so. Identify the installed APK by hash, so this
       # names a file rather than trusting one.
-      #
-      # One hash can match both names, and that is not a failure. This job pins
-      # TG_ANDROID_ABIS to the single ABI the emulator can run, and the
-      # convention plugin hands that one-element list to both
-      # defaultConfig.ndk.abiFilters and splits.abi.include() while keeping the
-      # universal APK and one shared versionCode. The two outputs are then
-      # packaged from an identical input set -- same dex, same resources, the
-      # same lone lib/x86_64/libtg_ws_proxy_jni.so, same manifest -- and come
-      # out byte-identical. Two names for one file means the device ran these
-      # bytes whichever name AGP reached for, and there is no packaging
-      # difference left for this step to catch, so say so and pass. It still
-      # bites for any ABI set with more than one entry, which is where the
-      # universal APK genuinely carries libraries the split does not.
       - name: Check which APK the tests ran against
         working-directory: android
         shell: bash
@@ -586,19 +573,11 @@ jobs:
             exit 1
           fi
           echo "connectedDebugAndroidTest ran against: ${matched[*]}"
-          split=""
-          for candidate in "${matched[@]}"; do
-            [[ "$candidate" == "app-x86_64-debug.apk" ]] && split="$candidate"
-          done
-          if [[ -z "$split" ]]; then
+          if [[ "${matched[*]}" != "app-x86_64-debug.apk" ]]; then
             echo "::error::the tests installed ${matched[*]}, expected" \
               "app-x86_64-debug.apk — the per-ABI split is the packaging this" \
               "job exists to load on a device"
             exit 1
-          fi
-          if [[ "${#matched[@]}" -gt 1 ]]; then
-            echo "(these outputs are byte-identical, so the device loaded the" \
-              "per-ABI packaging under whichever name AGP installed)"
           fi
 
       # The Gradle failure message names the test but not why it failed; the
