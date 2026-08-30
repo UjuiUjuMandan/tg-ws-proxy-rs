@@ -107,9 +107,6 @@ pluginManager.withPlugin("com.android.application") {
             // packaged .so is the one the device can load — too load-bearing to
             // leave resting on a flag's default value.
             testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-            ndk {
-                abiFilters += rustAbisProvider.get()
-            }
         }
 
         sourceSets.named("main") {
@@ -121,16 +118,15 @@ pluginManager.withPlugin("com.android.application") {
         // ABI for the downloader the way Play does, so the universal APK stays
         // the "just download it" artifact and the per-ABI ones are the roughly
         // one-third-size alternative for anyone who knows their device. The
-        // include set comes from the same provider as defaultConfig.ndk
-        // .abiFilters above: a split for an ABI cargoNdk never cross-compiled
-        // still builds and installs, then dies in System.loadLibrary on first
-        // launch, so the two lists must not be allowed to drift apart.
+        // include set comes from rustAbisProvider: a split for an ABI cargoNdk
+        // never cross-compiled still builds and installs, then dies in
+        // System.loadLibrary on first launch.
         splits {
             abi {
                 isEnable = true
                 // AGP's default include set is every ABI it knows about, and
                 // include() only adds to it, so without reset() a narrowed
-                // A narrowed ABI selection would still demand splits for ABIs it
+                // ABI selection would still demand splits for ABIs it
                 // deliberately excluded.
                 reset()
                 include(*rustAbisProvider.get().toTypedArray())
